@@ -113,6 +113,17 @@ app.post('/tasks/:id/delete', (req, res) => {
   res.json({ message: 'Task deleted successfully' });
 });
 
+// ⭐ 新增：发送验证码接口（先做一个 Mock）
+app.post('/auth/send-code', (req, res) => {
+  const { email } = req.body || {};
+  console.log('Mock /auth/send-code called, email =', email);
+
+  return res.json({
+    status: 'ok',
+    message: 'Mock verification code sent.'
+  });
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });

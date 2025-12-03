@@ -2,7 +2,7 @@
 // Change this to switch between local development and production
 // Default: backend on 8000 (Docker or teammate's local server)
 // Frontend dev server runs on 8000
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 // For production, you can set VITE_API_URL in .env to:
 // VITE_API_URL=https://loud-starling-77.deno.dev
