@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const sgMail = require('@sendgrid/mail');
+const crypto = require('crypto');
 
 // 读取 CI 写好的 project.env
 dotenv.config({ path: 'project.env' });
@@ -18,20 +19,10 @@ if (!process.env.SENDGRID_API_KEY) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ===== 中间件 =====
-app.use(cors({
-  origin: [
-    'https://baicloud.miever.net',
-    'http://localhost:5173',
-    'http://127.0.0.1:5173'
-  ],
-  credentials: false
-}));
-app.use(express.json());
-
-// ===== 内存里的“数据库” =====
+// ===== 简单内存“数据库” =====
 const verificationCodes = new Map(); // email -> { code, expiresAt }
-const users = [];                     // 简单用户表：{ id, username, email, passwordHash }
+const users = [];                    // { id, username, email, passwordHash }
+const sessions = new Map();          // sessionId -> { id, username, email }
 
 // ===== 工具函数 =====
 function isAaltoEmail(email) {
@@ -43,12 +34,45 @@ function generateVerificationCode() {
 }
 
 function hashPassword(plain) {
-  // 先用简单 hash，后面你要真上生产再换 bcrypt/scrypt
-  const crypto = require('crypto');
   return crypto.createHash('sha256').update(plain).digest('hex');
 }
 
-// ====== Mock 任务接口（跟你之前的一样）======
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  const result = {};
+  if (!header) return result;
+  header.split(';').forEach(part => {
+    const [k, v] = part.split('=');
+    if (!k) return;
+    result[k.trim()] = decodeURIComponent((v || '').trim());
+  });
+  return result;
+}
+
+// ===== 中间件 =====
+app.use(cors({
+  origin: [
+    'https://baicloud.miever.net',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173'
+  ],
+  credentials: true        // ⭐ 这里必须为 true，前端才能带 cookie
+}));
+app.use(express.json());
+
+// 把 session 挂到 req.user 上
+app.use((req, res, next) => {
+  const cookies = parseCookies(req);
+  const sid = cookies['handygo_session'];
+  if (sid && sessions.has(sid)) {
+    req.user = sessions.get(sid);
+  } else {
+    req.user = null;
+  }
+  next();
+});
+
+// ====== Mock 任务接口（原样保留）======
 
 let tasks = [
   {
@@ -175,7 +199,6 @@ app.post('/auth/send-code', async (req, res) => {
 
   console.log(`📧 Generated verification code ${code} for ${normalizedEmail}`);
 
-  // 构造邮件
   const msg = {
     to: normalizedEmail,
     from: {
@@ -271,7 +294,7 @@ app.post('/auth/registration', (req, res) => {
   });
 });
 
-// ====== Auth: 登录（简单版）======
+// ====== Auth: 登录（带“假 session”）======
 
 app.post('/auth/login', (req, res) => {
   const { email, password, username } = req.body || {};
@@ -293,7 +316,15 @@ app.post('/auth/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid email/username or password' });
   }
 
-  // 暂时不做真正 Session，前端只要拿到 user 就行
+  // 创建一个 session id，存进内存 & Cookie
+  const sid = crypto.randomBytes(16).toString('hex');
+  sessions.set(sid, { id: user.id, username: user.username, email: user.email });
+
+  res.setHeader(
+    'Set-Cookie',
+    `handygo_session=${sid}; HttpOnly; Path=/; SameSite=Lax`
+  );
+
   return res.json({
     message: `Logged in as ${user.email}`,
     user: {
@@ -304,16 +335,34 @@ app.post('/auth/login', (req, res) => {
   });
 });
 
-// ====== Auth: 其它接口简单占位 ======
+// ====== Auth: 登出 ======
 
 app.post('/auth/logout', (req, res) => {
-  // 没有真正 session，就返回成功
-  return res.json({ message: 'Logged out (dummy)' });
+  const cookies = parseCookies(req);
+  const sid = cookies['handygo_session'];
+  if (sid) {
+    sessions.delete(sid);
+    res.setHeader(
+      'Set-Cookie',
+      'handygo_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax'
+    );
+  }
+  return res.json({ message: 'Logged out' });
 });
 
+// ====== Auth: session 查询 ======
+
 app.get('/auth/session', (req, res) => {
-  // 先统一认为没有登录
-  return res.json({ user: null });
+  if (!req.user) {
+    return res.json({ user: null });
+  }
+  return res.json({
+    user: {
+      id: req.user.id,
+      username: req.user.username,
+      email: req.user.email
+    }
+  });
 });
 
 // ===== Health check =====
