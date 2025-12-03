@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const sgMail = require('@sendgrid/mail');
+const verificationCodes = new Map();
 
 // 1. 读取 project.env（CI 已经帮你在服务器生成了这个文件）
 dotenv.config({ path: 'project.env' });
