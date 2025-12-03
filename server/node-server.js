@@ -125,7 +125,6 @@ app.post('/tasks/:id/delete', (req, res) => {
   res.json({ message: 'Task deleted successfully' });
 });
 
-// ⭐ 新增：发送验证码接口（先做一个 Mock）
 app.post('/auth/send-code', async (req, res) => {
   const { email } = req.body || {};
 
@@ -135,49 +134,23 @@ app.post('/auth/send-code', async (req, res) => {
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  // 必须 Aalto 邮箱
   if (!normalizedEmail.endsWith("@aalto.fi")) {
     return res.status(400).json({ error: "Please use your Aalto email (@aalto.fi)" });
   }
 
-  // 生成 6 位数验证码
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 分钟
+  const expiresAt = Date.now() + 5 * 60 * 1000;
 
   verificationCodes.set(normalizedEmail, { code, expiresAt });
 
-  // 构造邮件内容
-  const msg = {
-    to: normalizedEmail,
-    from: {
-      email: process.env.SENDGRID_FROM_EMAIL,
-      name: process.env.SENDGRID_FROM_NAME,
-    },
-    subject: "Your HandyGO Verification Code",
-    text: `Your verification code is: ${code}`,
-    html: `<p>Your verification code is:</p>
-           <h2>${code}</h2>
-           <p>This code will expire in 5 minutes.</p>`
-  };
+  // 先不真正发邮件，防止卡住
+  console.log(`📧 [DEV] Generated verification code ${code} for ${normalizedEmail}`);
 
-  try {
-    await sgMail.send(msg);
-
-    console.log(`📧 Sent verification code ${code} to ${normalizedEmail}`);
-
-    return res.json({
-      message: "Verification code sent to your email"
-    });
-  } catch (err) {
-    console.error("SendGrid error:", err);
-
-    // dev fallback
-    return res.json({
-      message: "SendGrid failed — Returning code in dev mode",
-      code: code,
-      devMode: true
-    });
-  }
+  return res.json({
+    message: "Verification code generated (dev mode)",
+    code,
+    devMode: true
+  });
 });
 
 // Health check
