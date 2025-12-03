@@ -34,4 +34,4 @@ jobs:
           server: '${{ secrets.SERVER_IP }}'
           ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
           local_path: './client/build/*'
-          remote_path: '/home/ubuntu/test_miever'
+          remote_path: '/home/ubuntu/www-service/frontend'
