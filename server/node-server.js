@@ -193,42 +193,17 @@ app.post('/auth/send-code', async (req, res) => {
   }
 
   const code = generateVerificationCode();
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 分钟
+  const expiresAt = Date.now() + 5 * 60 * 1000;
 
   verificationCodes.set(normalizedEmail, { code, expiresAt });
 
-  console.log(`📧 Generated verification code ${code} for ${normalizedEmail}`);
+  console.log(`📧 [MOCK] Generated verification code ${code} for ${normalizedEmail}`);
 
-  const msg = {
-    to: normalizedEmail,
-    from: {
-      email: process.env.SENDGRID_FROM_EMAIL,
-      name: process.env.SENDGRID_FROM_NAME || 'HandyGO',
-    },
-    subject: 'Your HandyGO Verification Code',
-    text: `Your verification code is: ${code}`,
-    html: `<p>Your verification code is:</p>
-           <h2>${code}</h2>
-           <p>This code will expire in 5 minutes.</p>`
-  };
-
-  if (process.env.SENDGRID_API_KEY) {
-    sgMail
-      .send(msg)
-      .then(() => console.log(`📧 Email sent to ${normalizedEmail}`))
-      .catch((err) => {
-        console.error('SendGrid error:', err);
-
-        if (err.response && err.response.body) {
-          console.error('SendGrid error body:', JSON.stringify(err.response.body, null, 2));
-        }
-      });
-  } else {
-    console.warn('⚠️ SENDGRID_API_KEY not set, email not actually sent.');
-  }
-
+  // 👇 完全 mock：不再调用 sgMail
   return res.json({
-    message: 'Verification code sent (or will be sent if email is configured)'
+    message: 'DEV MODE: Verification code generated successfully',
+    code,
+    devMode: true
   });
 });
 
