@@ -1,5 +1,17 @@
 const express = require('express');
 const cors = require('cors');
+const dotenv = require('dotenv');
+const sgMail = require('@sendgrid/mail');
+
+// 1. 读取 project.env（CI 已经帮你在服务器生成了这个文件）
+dotenv.config({ path: 'project.env' });
+
+// 2. 配置 SendGrid
+if (!process.env.SENDGRID_API_KEY) {
+  console.warn('⚠️ SENDGRID_API_KEY is not set. /auth/send-code will fail.');
+} else {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+}
 
 const app = express();
 const PORT = 3001;
@@ -113,6 +125,60 @@ app.post('/tasks/:id/delete', (req, res) => {
   res.json({ message: 'Task deleted successfully' });
 });
 
+// ⭐ 新增：发送验证码接口（先做一个 Mock）
+app.post('/auth/send-code', async (req, res) => {
+  const { email } = req.body || {};
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // 必须 Aalto 邮箱
+  if (!normalizedEmail.endsWith("@aalto.fi")) {
+    return res.status(400).json({ error: "Please use your Aalto email (@aalto.fi)" });
+  }
+
+  // 生成 6 位数验证码
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 分钟
+
+  verificationCodes.set(normalizedEmail, { code, expiresAt });
+
+  // 构造邮件内容
+  const msg = {
+    to: normalizedEmail,
+    from: {
+      email: process.env.SENDGRID_FROM_EMAIL,
+      name: process.env.SENDGRID_FROM_NAME,
+    },
+    subject: "Your HandyGO Verification Code",
+    text: `Your verification code is: ${code}`,
+    html: `<p>Your verification code is:</p>
+           <h2>${code}</h2>
+           <p>This code will expire in 5 minutes.</p>`
+  };
+
+  try {
+    await sgMail.send(msg);
+
+    console.log(`📧 Sent verification code ${code} to ${normalizedEmail}`);
+
+    return res.json({
+      message: "Verification code sent to your email"
+    });
+  } catch (err) {
+    console.error("SendGrid error:", err);
+
+    // dev fallback
+    return res.json({
+      message: "SendGrid failed — Returning code in dev mode",
+      code: code,
+      devMode: true
+    });
+  }
+});
 
 // Health check
 app.get('/health', (req, res) => {
