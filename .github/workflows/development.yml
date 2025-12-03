@@ -8,17 +8,27 @@ on:
 jobs:
   Development-Deploy:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
 
-      - uses: actions/setup-node@v2
+    steps:
+      # 1. 拉代码
+      - name: Checkout repo
+        uses: actions/checkout@v2
+
+      # 2. 安装 Node 环境
+      - name: Setup Node
+        uses: actions/setup-node@v2
         with:
           node-version: 18
 
-      - uses: skiddph/actions-env@v1.0.2
+      # 3. 载入你原来用的环境变量（如果暂时不用也可以先保留）
+      - name: Load env
+        uses: skiddph/actions-env@v1.0.2
         with:
           prefix: ""
 
+      # =========================
+      # 前端：SvelteKit 静态构建
+      # =========================
       - name: Install frontend deps
         working-directory: ./client
         run: npm install
@@ -35,3 +45,31 @@ jobs:
           ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
           local_path: './client/build/*'
           remote_path: '/home/ubuntu/www-service/frontend'
+
+      # =========================
+      # 后端：同步 server 代码
+      # =========================
+      - name: Deploy backend via SFTP
+        uses: wlixcc/SFTP-Deploy-Action@v1.0
+        with:
+          username: 'ubuntu'
+          server: '${{ secrets.SERVER_IP }}'
+          ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          local_path: './server/*'
+          remote_path: '/home/ubuntu/www-service/backend'
+
+      # =========================
+      # 后端：安装依赖 + 用 pm2 重启
+      # =========================
+      - name: Install backend deps and restart via PM2
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/ubuntu/www-service/backend
+            npm install --omit=dev
+            # 这里假设 server/package.json 里有 "start" 脚本
+            # 比如 "start": "node node-server.js"
+            pm2 start npm --name www-backend -- start || pm2 restart www-backend
