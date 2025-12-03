@@ -1,27 +1,55 @@
+// server/node-server.js
+
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const sgMail = require('@sendgrid/mail');
-const verificationCodes = new Map();
 
-// 1. 读取 project.env（CI 已经帮你在服务器生成了这个文件）
+// 读取 CI 写好的 project.env
 dotenv.config({ path: 'project.env' });
 
-// 2. 配置 SendGrid
+// 配置 SendGrid（如果没配好，只是打个 warning，不会影响接口返回）
 if (!process.env.SENDGRID_API_KEY) {
-  console.warn('⚠️ SENDGRID_API_KEY is not set. /auth/send-code will fail.');
+  console.warn('⚠️ SENDGRID_API_KEY is not set. Emails will NOT actually be sent.');
 } else {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
+// ===== 中间件 =====
+app.use(cors({
+  origin: [
+    'https://baicloud.miever.net',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173'
+  ],
+  credentials: false
+}));
 app.use(express.json());
 
-// Mock data for demo
+// ===== 内存里的“数据库” =====
+const verificationCodes = new Map(); // email -> { code, expiresAt }
+const users = [];                     // 简单用户表：{ id, username, email, passwordHash }
+
+// ===== 工具函数 =====
+function isAaltoEmail(email) {
+  return email.trim().toLowerCase().endsWith('@aalto.fi');
+}
+
+function generateVerificationCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function hashPassword(plain) {
+  // 先用简单 hash，后面你要真上生产再换 bcrypt/scrypt
+  const crypto = require('crypto');
+  return crypto.createHash('sha256').update(plain).digest('hex');
+}
+
+// ====== Mock 任务接口（跟你之前的一样）======
+
 let tasks = [
   {
     id: '1',
@@ -31,7 +59,7 @@ let tasks = [
     completed: false
   },
   {
-    id: '2', 
+    id: '2',
     name: 'Print Documents at Library',
     description: 'Need 20 pages printed for my thesis. I have the PDF files ready and can send them via email.',
     time: new Date('2025-01-15T14:15:00Z').toISOString(),
@@ -67,7 +95,6 @@ let tasks = [
   }
 ];
 
-// Routes
 app.get('/tasks', (req, res) => {
   res.json(tasks);
 });
@@ -82,11 +109,11 @@ app.get('/tasks/:id', (req, res) => {
 
 app.post('/tasks', (req, res) => {
   const { name, description } = req.body;
-  
+
   if (!name || !description) {
     return res.status(400).json({ error: 'Name and description are required' });
   }
-  
+
   const newTask = {
     id: (tasks.length + 1).toString(),
     name,
@@ -94,7 +121,7 @@ app.post('/tasks', (req, res) => {
     time: new Date().toISOString(),
     completed: false
   };
-  
+
   tasks.unshift(newTask);
   res.status(201).json(newTask);
 });
@@ -104,7 +131,7 @@ app.post('/tasks/:id', (req, res) => {
   if (taskIndex === -1) {
     return res.status(404).json({ error: 'Task not found' });
   }
-  
+
   const { name, description } = req.body;
   tasks[taskIndex] = {
     ...tasks[taskIndex],
@@ -112,7 +139,7 @@ app.post('/tasks/:id', (req, res) => {
     description: description || tasks[taskIndex].description,
     time: new Date().toISOString()
   };
-  
+
   res.json(tasks[taskIndex]);
 });
 
@@ -121,33 +148,34 @@ app.post('/tasks/:id/delete', (req, res) => {
   if (taskIndex === -1) {
     return res.status(404).json({ error: 'Task not found' });
   }
-  
+
   tasks.splice(taskIndex, 1);
   res.json({ message: 'Task deleted successfully' });
 });
+
+// ====== Auth: 发送验证码 ======
 
 app.post('/auth/send-code', async (req, res) => {
   const { email } = req.body || {};
 
   if (!email) {
-    return res.status(400).json({ error: "Email is required" });
+    return res.status(400).json({ error: 'Email is required' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  if (!normalizedEmail.endsWith("@aalto.fi")) {
-    return res.status(400).json({ error: "Please use your Aalto email (@aalto.fi)" });
+  if (!isAaltoEmail(normalizedEmail)) {
+    return res.status(400).json({ error: 'Please use your Aalto email (@aalto.fi)' });
   }
 
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = Date.now() + 5 * 60 * 1000;
+  const code = generateVerificationCode();
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 分钟
 
-  // 把验证码存起来，后面 verify-code 可以用
   verificationCodes.set(normalizedEmail, { code, expiresAt });
 
   console.log(`📧 Generated verification code ${code} for ${normalizedEmail}`);
 
-  // 构造邮件内容
+  // 构造邮件
   const msg = {
     to: normalizedEmail,
     from: {
@@ -161,50 +189,154 @@ app.post('/auth/send-code', async (req, res) => {
            <p>This code will expire in 5 minutes.</p>`
   };
 
-  // 后台尝试发邮件，不阻塞接口
   if (process.env.SENDGRID_API_KEY) {
     sgMail
       .send(msg)
-      .then(() => {
-        console.log(`📧 Email sent to ${normalizedEmail}`);
-      })
-      .catch((err) => {
-        console.error('SendGrid error:', err);
-      });
+      .then(() => console.log(`📧 Email sent to ${normalizedEmail}`))
+      .catch((err) => console.error('SendGrid error:', err));
   } else {
-    console.warn('⚠️ SENDGRID_API_KEY not set, email not sent.');
+    console.warn('⚠️ SENDGRID_API_KEY not set, email not actually sent.');
   }
 
-  // 立刻给前端返回，不等 sendGrid
   return res.json({
-    message: 'Verification code sent (or will be sent if email is configured)',
-    code,          // ⭐ 返回给前端，开发阶段用
-    devMode: true  // 标记一下现在是 dev 模式
+    message: 'Verification code sent (or will be sent if email is configured)'
   });
 });
 
-// Health check
+// ====== Auth: 校验验证码 ======
+
+app.post('/auth/verify-code', (req, res) => {
+  const { email, code } = req.body || {};
+
+  if (!email || !code) {
+    return res.status(400).json({ error: 'Email and code are required' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const stored = verificationCodes.get(normalizedEmail);
+
+  if (!stored) {
+    return res.status(400).json({ error: 'No verification code for this email' });
+  }
+
+  if (Date.now() > stored.expiresAt) {
+    verificationCodes.delete(normalizedEmail);
+    return res.status(400).json({ error: 'Verification code has expired' });
+  }
+
+  if (stored.code !== code) {
+    return res.status(400).json({ error: 'Invalid verification code' });
+  }
+
+  verificationCodes.delete(normalizedEmail);
+  return res.json({ message: 'Verification code is valid' });
+});
+
+// ====== Auth: 注册 ======
+
+app.post('/auth/registration', (req, res) => {
+  const { username, email, password, verificationCode } = req.body || {};
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ error: 'Username, email and password are required' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!isAaltoEmail(normalizedEmail)) {
+    return res.status(400).json({ error: 'Please use an Aalto email address (@aalto.fi)' });
+  }
+
+  const stored = verificationCodes.get(normalizedEmail);
+  if (!stored || stored.code !== verificationCode || Date.now() > stored.expiresAt) {
+    return res.status(400).json({ error: 'Invalid or expired verification code' });
+  }
+
+  if (users.some(u => u.email === normalizedEmail)) {
+    return res.status(400).json({ error: 'An account with this email already exists.' });
+  }
+
+  const newUser = {
+    id: (users.length + 1).toString(),
+    username: username.trim(),
+    email: normalizedEmail,
+    passwordHash: hashPassword(password.trim())
+  };
+
+  users.push(newUser);
+  verificationCodes.delete(normalizedEmail);
+
+  return res.json({
+    message: 'Registration success',
+    user: { id: newUser.id, username: newUser.username, email: newUser.email }
+  });
+});
+
+// ====== Auth: 登录（简单版）======
+
+app.post('/auth/login', (req, res) => {
+  const { email, password, username } = req.body || {};
+
+  let user = null;
+  if (email) {
+    user = users.find(u => u.email === email.trim().toLowerCase());
+  } else if (username) {
+    user = users.find(u => u.username === username.trim());
+  } else {
+    return res.status(400).json({ error: 'Email or username is required' });
+  }
+
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid email/username or password' });
+  }
+
+  if (user.passwordHash !== hashPassword(String(password || ''))) {
+    return res.status(401).json({ error: 'Invalid email/username or password' });
+  }
+
+  // 暂时不做真正 Session，前端只要拿到 user 就行
+  return res.json({
+    message: `Logged in as ${user.email}`,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email
+    }
+  });
+});
+
+// ====== Auth: 其它接口简单占位 ======
+
+app.post('/auth/logout', (req, res) => {
+  // 没有真正 session，就返回成功
+  return res.json({ message: 'Logged out (dummy)' });
+});
+
+app.get('/auth/session', (req, res) => {
+  // 先统一认为没有登录
+  return res.json({ user: null });
+});
+
+// ===== Health check =====
+
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// ===== 启动服务 =====
+
 app.listen(PORT, () => {
   console.log(`🚀 HandyGO Backend Server running on http://localhost:${PORT}`);
-  console.log(`📋 Available endpoints:`);
-  console.log(`   GET  /tasks - List all tasks`);
-  console.log(`   GET  /tasks/:id - Get specific task`);
-  console.log(`   POST /tasks - Create new task`);
-  console.log(`   POST /tasks/:id - Update task`);
-  console.log(`   POST /tasks/:id/delete - Delete task`);
-  console.log(`   GET  /health - Health check`);
+  console.log('📋 Endpoints:');
+  console.log('   GET  /tasks');
+  console.log('   GET  /tasks/:id');
+  console.log('   POST /tasks');
+  console.log('   POST /tasks/:id');
+  console.log('   POST /tasks/:id/delete');
+  console.log('   POST /auth/send-code');
+  console.log('   POST /auth/verify-code');
+  console.log('   POST /auth/registration');
+  console.log('   POST /auth/login');
+  console.log('   POST /auth/logout');
+  console.log('   GET  /auth/session');
+  console.log('   GET  /health');
 });
-
-
-
-
-
-
-
-
-
-
