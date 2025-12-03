@@ -1,209 +1,259 @@
-const express = require('express');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const sgMail = require('@sendgrid/mail');
-const verificationCodes = new Map();
+import { hash, verify } from "scrypt";
+import { z } from "zod";
 
-// 1. 读取 project.env（CI 已经帮你在服务器生成了这个文件）
-dotenv.config({ path: 'project.env' });
+import * as sessionService from "./session-service.js";
+import * as userService from "./user-service.js";
+import * as emailService from "./email-service.js";
 
-// 2. 配置 SendGrid
-if (!process.env.SENDGRID_API_KEY) {
-  console.warn('⚠️ SENDGRID_API_KEY is not set. /auth/send-code will fail.');
-} else {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-}
+// In-memory store for verification codes (in production, use Redis or database)
+const verificationCodes = new Map(); // email -> { code, expiresAt }
 
-const app = express();
-const PORT = 3001;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Mock data for demo
-let tasks = [
-  {
-    id: '1',
-    name: 'Package Pickup from A Bloc',
-    description: 'Need someone to pick up a package from the post office at A Bloc. The package is from Amazon and I can provide the tracking number.',
-    time: new Date('2025-01-15T10:30:00Z').toISOString(),
-    completed: false
-  },
-  {
-    id: '2', 
-    name: 'Print Documents at Library',
-    description: 'Need 20 pages printed for my thesis. I have the PDF files ready and can send them via email.',
-    time: new Date('2025-01-15T14:15:00Z').toISOString(),
-    completed: false
-  },
-  {
-    id: '3',
-    name: 'Grocery Shopping at K-Citymarket',
-    description: 'Small grocery run to K-Citymarket Otaniemi. I have a shopping list and can provide payment.',
-    time: new Date('2025-01-14T16:45:00Z').toISOString(),
-    completed: true
-  },
-  {
-    id: '4',
-    name: 'Lend Calculator for Exam',
-    description: 'Need to borrow a scientific calculator for my math exam tomorrow. Will return it the same day.',
-    time: new Date('2025-01-14T09:20:00Z').toISOString(),
-    completed: false
-  },
-  {
-    id: '5',
-    name: 'Deliver Books to B Bloc',
-    description: 'Need someone to deliver 3 textbooks to a friend at B Bloc. Books are ready for pickup.',
-    time: new Date('2025-01-13T11:00:00Z').toISOString(),
-    completed: true
-  },
-  {
-    id: '6',
-    name: 'Help with Moving Boxes',
-    description: 'Need help carrying 5 boxes from my dorm to a friend\'s apartment. Should take about 30 minutes.',
-    time: new Date('2025-01-13T13:30:00Z').toISOString(),
-    completed: false
-  }
-];
-
-// Routes
-app.get('/tasks', (req, res) => {
-  res.json(tasks);
+const validator = z.object({
+  email: z.string().email({ message: "Not a valid e-mail address" }),
 });
 
-app.get('/tasks/:id', (req, res) => {
-  const task = tasks.find(t => t.id === req.params.id);
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
-  }
-  res.json(task);
-});
+// Validate Aalto email
+const isAaltoEmail = (email) => {
+  return email.trim().toLowerCase().endsWith('@aalto.fi');
+};
 
-app.post('/tasks', (req, res) => {
-  const { name, description } = req.body;
-  
-  if (!name || !description) {
-    return res.status(400).json({ error: 'Name and description are required' });
-  }
-  
-  const newTask = {
-    id: (tasks.length + 1).toString(),
-    name,
-    description,
-    time: new Date().toISOString(),
-    completed: false
-  };
-  
-  tasks.unshift(newTask);
-  res.status(201).json(newTask);
-});
+// Generate 6-digit verification code
+const generateVerificationCode = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
 
-app.post('/tasks/:id', (req, res) => {
-  const taskIndex = tasks.findIndex(t => t.id === req.params.id);
-  if (taskIndex === -1) {
-    return res.status(404).json({ error: 'Task not found' });
-  }
-  
-  const { name, description } = req.body;
-  tasks[taskIndex] = {
-    ...tasks[taskIndex],
-    name: name || tasks[taskIndex].name,
-    description: description || tasks[taskIndex].description,
-    time: new Date().toISOString()
-  };
-  
-  res.json(tasks[taskIndex]);
-});
-
-app.post('/tasks/:id/delete', (req, res) => {
-  const taskIndex = tasks.findIndex(t => t.id === req.params.id);
-  if (taskIndex === -1) {
-    return res.status(404).json({ error: 'Task not found' });
-  }
-  
-  tasks.splice(taskIndex, 1);
-  res.json({ message: 'Task deleted successfully' });
-});
-
-app.post('/auth/send-code', async (req, res) => {
-  const { email } = req.body || {};
+// Send verification code to email
+const sendVerificationCode = async (c) => {
+  const data = await c.req.json();
+  const { email } = data;
 
   if (!email) {
-    return res.status(400).json({ error: "Email is required" });
+    return c.json({ error: "Email is required" }, 400);
+  }
+
+  // Validate email format
+  const validationResult = validator.safeParse({ email });
+  if (!validationResult.success) {
+    return c.json({ error: "Invalid email address" }, 400);
+  }
+
+  // Check if it's an Aalto email
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!isAaltoEmail(normalizedEmail)) {
+    return c.json({ error: "Please use an Aalto email address (@aalto.fi)" }, 400);
+  }
+
+  // Generate and store verification code
+  const code = generateVerificationCode();
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+
+  verificationCodes.set(normalizedEmail, { code, expiresAt });
+
+  // Check if email service is configured
+  const hasEmailConfig = Deno.env.get('SENDGRID_API_KEY') || Deno.env.get('SMTP_HOST');
+  
+  // Try to send email
+  try {
+    await emailService.sendVerificationCodeEmail(normalizedEmail, code);
+    console.log(`[Email] Verification code sent to ${normalizedEmail}`);
+    
+    // Return success (don't include code in production)
+    return c.json({ 
+      message: "Verification code sent to your email",
+      ...(hasEmailConfig ? {} : { code: code, devMode: true })
+    }, 200);
+  } catch (error) {
+    console.error(`[Email] Failed to send email to ${normalizedEmail}:`, error);
+    // In development, still log the code even if email fails
+    console.log(`[DEV] Verification code for ${normalizedEmail}: ${code}`);
+    console.log(`[DEV] Code expires at: ${new Date(expiresAt).toISOString()}`);
+    
+    // Always return code in dev mode for testing
+    return c.json({ 
+      message: hasEmailConfig ? "Failed to send email. Check server logs." : "Verification code sent (dev mode - no email service configured)",
+      code: code,
+      devMode: !hasEmailConfig
+    }, 200);
+  }
+};
+
+// Verify code
+const verifyCode = async (c) => {
+  const data = await c.req.json();
+  const { email, code } = data;
+
+  if (!email || !code) {
+    return c.json({ error: "Email and code are required" }, 400);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+  const stored = verificationCodes.get(normalizedEmail);
 
-  if (!normalizedEmail.endsWith("@aalto.fi")) {
-    return res.status(400).json({ error: "Please use your Aalto email (@aalto.fi)" });
+  if (!stored) {
+    return c.json({ error: "No verification code found for this email" }, 400);
   }
 
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = Date.now() + 5 * 60 * 1000;
+  if (Date.now() > stored.expiresAt) {
+    verificationCodes.delete(normalizedEmail);
+    return c.json({ error: "Verification code has expired" }, 400);
+  }
 
-  // 把验证码存起来，后面 verify-code 可以用
-  verificationCodes.set(normalizedEmail, { code, expiresAt });
+  if (stored.code !== code) {
+    return c.json({ error: "Invalid verification code" }, 400);
+  }
 
-  console.log(`📧 Generated verification code ${code} for ${normalizedEmail}`);
+  // Code is valid, remove it from store
+  verificationCodes.delete(normalizedEmail);
 
-  // 构造邮件内容
-  const msg = {
-    to: normalizedEmail,
-    from: {
-      email: process.env.SENDGRID_FROM_EMAIL,
-      name: process.env.SENDGRID_FROM_NAME || 'HandyGO',
-    },
-    subject: 'Your HandyGO Verification Code',
-    text: `Your verification code is: ${code}`,
-    html: `<p>Your verification code is:</p>
-           <h2>${code}</h2>
-           <p>This code will expire in 5 minutes.</p>`
-  };
+  return c.json({ message: "Verification code is valid" }, 200);
+};
 
-  // 后台尝试发邮件，不阻塞接口
-  if (process.env.SENDGRID_API_KEY) {
-    sgMail
-      .send(msg)
-      .then(() => {
-        console.log(`📧 Email sent to ${normalizedEmail}`);
-      })
-      .catch((err) => {
-        console.error('SendGrid error:', err);
-      });
+const registerUser = async (c) => {
+  try {
+    const data = await c.req.json();
+    const validationResult = validator.safeParse(data);
+
+    if(!validationResult.success) {
+      return c.json(validationResult.error.format(), 400);
+    }
+
+    const { username, email, password, verificationCode } = data;
+
+    // Validate Aalto email
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!isAaltoEmail(normalizedEmail)) {
+      return c.json({ error: "Please use an Aalto email address (@aalto.fi)" }, 400);
+    }
+
+    // Check if user already exists
+    const existingUser = await userService.getUserFromEmail(normalizedEmail);
+    if (existingUser && existingUser.length > 0) {
+      return c.json({ error: "An account with this email already exists. Please log in instead." }, 400);
+    }
+
+    // Verify code if provided
+    if (verificationCode) {
+      const stored = verificationCodes.get(normalizedEmail);
+      if (!stored || stored.code !== verificationCode || Date.now() > stored.expiresAt) {
+        return c.json({ error: "Invalid or expired verification code" }, 400);
+      }
+      // Remove code after successful registration
+      verificationCodes.delete(normalizedEmail);
+    }
+
+    const result = await userService.createUser(username, normalizedEmail, hash(password.trim()));
+    
+    return c.json(result, 200);
+  } catch (error) {
+    console.error('Registration error:', error);
+    
+    // Handle database constraint violations
+    if (error.code === '23505' || error.constraint_name) {
+      if (error.constraint_name === 'users_lower_idx' || error.detail?.includes('email')) {
+        return c.json({ error: "An account with this email already exists. Please log in instead." }, 400);
+      }
+      if (error.constraint_name?.includes('username')) {
+        return c.json({ error: "This username is already taken. Please choose another one." }, 400);
+      }
+    }
+    
+    // Handle other database errors
+    if (error.name === 'PostgresError') {
+      return c.json({ error: "Database error. Please try again later." }, 500);
+    }
+    
+    // Generic error handling
+    return c.json({ error: error.message || "Registration failed. Please try again." }, 500);
+  }
+}
+
+//TODO: replace error messages with generic ones
+const loginUser = async (c) => {
+  const data = await c.req.json();
+  const { email, password, username } = data;
+
+  // Support login with either email or username
+  let userResult;
+  if (email) {
+    userResult = await userService.getUserFromEmail(email.trim());
+  } else if (username) {
+    userResult = await userService.getUserFromUsername(username.trim());
   } else {
-    console.warn('⚠️ SENDGRID_API_KEY not set, email not sent.');
+    return c.json({ error: "Email or username is required" }, 400);
   }
 
-  // 立刻给前端返回，不等 sendGrid
-  return res.json({
-    message: 'Verification code sent (or will be sent if email is configured)',
-    devMode: false
+  if (userResult.length === 0) {
+    return c.json({ error: "Invalid email/username or password" }, 401);
+  }
+
+  const user = userResult[0];
+
+  const validPass = verify(password.trim(), user.password_hash);
+  if(validPass) {
+    //Set a new session here
+    await sessionService.createSession(c, user);
+    return c.json({ 
+      message: `Logged in as ${user.email}`,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        name: user.name || null,
+        avatar_url: user.avatar_url || null,
+        bio: user.bio || null,
+        address: user.address || null,
+        phone: user.phone || null
+      }
+    });
+  } else {
+    return c.json({ error: "Invalid email/username or password" }, 401);
+  }
+}
+
+const logoutUser = async (c) => {
+  await sessionService.deleteSession(c);
+
+  return c.json({ message: "Session deleted." });
+}
+
+// Update user profile
+const updateProfile = async (c) => {
+  if (!c.user) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const data = await c.req.json();
+  const { name, username, avatar_url, bio, address, phone } = data;
+
+  // Only allow updating profile fields (not password or email)
+  const updateData = {};
+  if (name !== undefined) updateData.name = name;
+  if (username !== undefined) updateData.username = username;
+  if (avatar_url !== undefined) updateData.avatar_url = avatar_url;
+  if (bio !== undefined) updateData.bio = bio;
+  if (address !== undefined) updateData.address = address;
+  if (phone !== undefined) updateData.phone = phone;
+
+  const result = await userService.updateUser(c.user.id, updateData);
+  
+  if (result.length === 0) {
+    return c.json({ error: "User not found" }, 404);
+  }
+
+  const updatedUser = result[0];
+  return c.json({
+    message: "Profile updated successfully",
+    user: {
+      id: updatedUser.id,
+      username: updatedUser.username,
+      email: updatedUser.email,
+      name: updatedUser.name,
+      avatar_url: updatedUser.avatar_url,
+      bio: updatedUser.bio,
+      address: updatedUser.address,
+      phone: updatedUser.phone
+    }
   });
-});
+}
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 HandyGO Backend Server running on http://localhost:${PORT}`);
-  console.log(`📋 Available endpoints:`);
-  console.log(`   GET  /tasks - List all tasks`);
-  console.log(`   GET  /tasks/:id - Get specific task`);
-  console.log(`   POST /tasks - Create new task`);
-  console.log(`   POST /tasks/:id - Update task`);
-  console.log(`   POST /tasks/:id/delete - Delete task`);
-  console.log(`   GET  /health - Health check`);
-});
-
-
-
-
-
-
-
-
-
-
+export { registerUser, loginUser, logoutUser, sendVerificationCode, verifyCode, updateProfile }
