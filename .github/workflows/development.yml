@@ -10,19 +10,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2-beta
+
+      - uses: actions/setup-node@v2
         with:
           node-version: 18
+
       - uses: skiddph/actions-env@v1.0.2
         with:
           prefix: ""
-      - run: npm install
-      - run: npm run-script build
 
-      - uses: wlixcc/SFTP-Deploy-Action@v1.0 
+      - name: Install frontend deps
+        working-directory: ./client
+        run: npm install
+
+      - name: Build frontend
+        working-directory: ./client
+        run: npm run build
+
+      - name: Deploy frontend via SFTP
+        uses: wlixcc/SFTP-Deploy-Action@v1.0 
         with:  
-          username: 'ubuntu'   #ssh user name
-          server: '${{ secrets.SERVER_IP }}' #引用之前创建好的secret
-          ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }} #引用之前创建好的secret
-          local_path: './public/*'  # 对应我们项目build的文件夹路径
+          username: 'ubuntu'
+          server: '${{ secrets.SERVER_IP }}'
+          ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          local_path: './client/build/*'
           remote_path: '/home/ubuntu/test_miever'
