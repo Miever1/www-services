@@ -178,7 +178,8 @@ app.post('/auth/send-code', async (req, res) => {
   // 立刻给前端返回，不等 sendGrid
   return res.json({
     message: 'Verification code sent (or will be sent if email is configured)',
-    devMode: false
+    code,          // ⭐ 返回给前端，开发阶段用
+    devMode: true  // 标记一下现在是 dev 模式
   });
 });
 
