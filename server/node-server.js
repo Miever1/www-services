@@ -216,7 +216,13 @@ app.post('/auth/send-code', async (req, res) => {
     sgMail
       .send(msg)
       .then(() => console.log(`📧 Email sent to ${normalizedEmail}`))
-      .catch((err) => console.error('SendGrid error:', err));
+      .catch((err) => {
+        console.error('SendGrid error:', err);
+
+        if (err.response && err.response.body) {
+          console.error('SendGrid error body:', JSON.stringify(err.response.body, null, 2));
+        }
+      });
   } else {
     console.warn('⚠️ SENDGRID_API_KEY not set, email not actually sent.');
   }
