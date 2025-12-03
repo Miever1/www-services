@@ -35,6 +35,8 @@ jobs:
 
       - name: Build frontend
         working-directory: ./client
+        env:
+          VITE_API_URL: "/api"        # ⭐ 这里新增：生产环境的 API 基地址
         run: npm run build
 
       - name: Deploy frontend via SFTP
@@ -70,7 +72,6 @@ jobs:
           script: |
             cd /home/ubuntu/www-service/backend
 
-            # 1. 写入 project.env（内容来自 GitHub Secrets）
             cat > project.env << 'EOF'
             POSTGRES_USER=${{ secrets.POSTGRES_USER }}
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
