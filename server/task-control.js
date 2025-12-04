@@ -5,13 +5,59 @@ import * as taskService from "./task-service.js";
 
 //Pass task as JSON file
 const createTask = async (c) => {
-  const body = await c.req.json();
-  
-  // Get userId from context (set by middleware) or from request body
-  const userId = c.user?.id || body.userId || '00000000-0000-0000-0000-000000000000';
-  
-  const result = await taskService.createTask(userId, body);
-  return c.json(result, 201);
+  try {
+    let body;
+    try {
+      body = await c.req.json();
+    } catch (parseError) {
+      console.error('Error parsing request body:', parseError);
+      return c.json({ error: 'Invalid request body. Expected JSON format.' }, 400);
+    }
+    
+    // Log request size for debugging
+    const requestSize = JSON.stringify(body).length;
+    console.log(`Create task: Request size: ${requestSize} bytes`);
+    
+    // Check if images are too large
+    if (body.images && Array.isArray(body.images)) {
+      const totalImageSize = body.images.reduce((sum, img) => {
+        if (typeof img === 'string') return sum + img.length;
+        if (img && img.data) return sum + img.data.length;
+        if (img && typeof img === 'object') return sum + JSON.stringify(img).length;
+        return sum;
+      }, 0);
+      console.log(`Create task: Total images size: ${totalImageSize} bytes, Image count: ${body.images.length}`);
+      
+      // Limit to 6 images and warn if too large
+      if (body.images.length > 6) {
+        console.warn(`Create task: Too many images (${body.images.length}), limiting to 6`);
+        body.images = body.images.slice(0, 6);
+      }
+      
+      if (totalImageSize > 10000000) { // 10MB
+        console.warn(`Create task: Images too large (${totalImageSize} bytes), this may cause issues`);
+      }
+    }
+    
+    // Get userId from context (set by middleware) or from request body
+    const userId = c.user?.id || body.userId || '00000000-0000-0000-0000-000000000000';
+    
+    console.log(`Create task: Creating task for user ${userId}, name: ${body.name}`);
+    
+    const result = await taskService.createTask(userId, body);
+    
+    console.log(`Create task: Task created successfully with ID: ${result.id}`);
+    
+    return c.json(result, 201);
+  } catch (error) {
+    console.error('Error creating task:', error);
+    console.error('Error stack:', error.stack);
+    return c.json({ 
+      error: 'Failed to create task', 
+      message: error.message || 'An unexpected error occurred',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    }, 500);
+  }
 }
 
 const showTask = async (c) => {

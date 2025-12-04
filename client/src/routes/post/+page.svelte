@@ -213,11 +213,32 @@
         console.log('Task created successfully:', result);
         goto('/');
       } else {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || 'Failed to create task');
+        // Try to get error message from response
+        let errorMessage = 'Unknown error';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+          console.error('Server error response:', errorData);
+        } catch (parseError) {
+          // If response is not JSON, try to get text
+          try {
+            const errorText = await response.text();
+            errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`;
+            console.error('Server error (non-JSON):', errorText);
+          } catch (textError) {
+            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+            console.error('Failed to parse error response:', textError);
+          }
+        }
+        throw new Error(errorMessage);
       }
     } catch (error) {
       console.error('Error creating task:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
       alert(`Failed to create task: ${error.message}`);
     } finally {
       submitting = false;
