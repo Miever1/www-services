@@ -130,7 +130,9 @@
     
     saving = true;
     try {
-      const response = await fetch(apiUrl(API_CONFIG.endpoints.auth.updateProfile), {
+      // Use the profile endpoint defined in API_CONFIG
+      const endpoint = API_CONFIG.endpoints.profile || '/profile';
+      const response = await fetch(apiUrl(endpoint), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

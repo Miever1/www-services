@@ -26,6 +26,12 @@ export const API_CONFIG = {
 
 // Helper function to build full URL
 export function apiUrl(path) {
+  // Guard against undefined or null path
+  if (!path || typeof path !== 'string') {
+    console.error('apiUrl: Invalid path provided:', path);
+    throw new Error(`Invalid API path: ${path}`);
+  }
+  
   // If path already starts with http, return as is
   if (path.startsWith('http')) {
     return path;
