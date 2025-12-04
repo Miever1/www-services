@@ -1,47 +1,257 @@
 <script>
   import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
+  import { API_CONFIG, apiUrl } from '$lib/api-config.js';
   
-  let taskForm = {
-    name: '',
-    description: ''
+  // User authentication state
+  let isLoggedIn = false;
+  let currentUser = null;
+  let showUserMenu = false;
+  let showLanguageMenu = false;
+  let currentLanguage = 'en';
+  
+  // Form state
+  let postType = 'need';
+  let postTitle = '';
+  let description = '';
+  let price = 0;
+  let location = '';
+  let uploadedImages = []; // File objects
+  let imageBase64Array = []; // Base64 strings for API
+  
+  // Location search
+  let showLocationSuggestions = false;
+  let locationSuggestions = [];
+  let searchingLocation = false;
+  
+  // Submission state
+  let submitting = false;
+  
+  // Language settings
+  const languages = {
+    en: 'English',
+    sv: 'Svenska',
+    fi: 'Suomi'
   };
   
-  let submitting = false;
-  let success = false;
+  onMount(async () => {
+    // Check login status
+    try {
+      const response = await fetch(apiUrl(API_CONFIG.endpoints.auth.session), {
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.user) {
+          currentUser = data.user;
+          isLoggedIn = true;
+        }
+      }
+    } catch (error) {
+      console.error('Error checking session:', error);
+    }
+    
+    // Get language preference
+    const savedLanguage = localStorage.getItem('language');
+    if (savedLanguage) {
+      currentLanguage = savedLanguage;
+    }
+  });
   
-  async function handleSubmit() {
-    if (!taskForm.name.trim() || !taskForm.description.trim()) {
-      alert('Please fill in all required fields');
+  // Convert image file to base64
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  
+  // Handle image upload
+  async function handleImageUpload(event) {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+    
+    // Limit to 6 images
+    const remainingSlots = 6 - uploadedImages.length;
+    const filesToAdd = files.slice(0, remainingSlots);
+    
+    if (files.length > remainingSlots) {
+      alert(`You can only upload ${remainingSlots} more image(s). Maximum 6 images allowed.`);
+    }
+    
+    // Add files to uploadedImages array
+    uploadedImages = [...uploadedImages, ...filesToAdd];
+    
+    // Convert all images to base64
+    imageBase64Array = [];
+    for (const file of uploadedImages) {
+      try {
+        const base64 = await fileToBase64(file);
+        imageBase64Array.push(base64);
+      } catch (error) {
+        console.error('Error converting image to base64:', error);
+      }
+    }
+    
+    // Reset file input
+    event.target.value = '';
+  }
+  
+  // Handle location input change
+  let locationTimeout;
+  async function handleLocationChange(value) {
+    location = value;
+    showLocationSuggestions = false;
+    
+    clearTimeout(locationTimeout);
+    
+    if (value.length < 3) {
+      return;
+    }
+    
+    locationTimeout = setTimeout(async () => {
+      try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(value)}&limit=5`, {
+          headers: {
+            'User-Agent': 'HandyGO App'
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          locationSuggestions = data;
+          showLocationSuggestions = data.length > 0;
+        }
+      } catch (error) {
+        console.error('Error fetching location suggestions:', error);
+      }
+    }, 500);
+  }
+  
+  // Get current location
+  function getCurrentLocation() {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser');
+      return;
+    }
+    
+    searchingLocation = true;
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const { latitude, longitude } = position.coords;
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
+            {
+              headers: {
+                'User-Agent': 'HandyGO App'
+              }
+            }
+          );
+          if (response.ok) {
+            const data = await response.json();
+            location = data.display_name || `${latitude}, ${longitude}`;
+            showLocationSuggestions = false;
+          }
+        } catch (error) {
+          console.error('Error getting location:', error);
+          alert('Failed to get location name');
+        } finally {
+          searchingLocation = false;
+        }
+      },
+      (error) => {
+        console.error('Error getting location:', error);
+        alert('Failed to get your location');
+        searchingLocation = false;
+      }
+    );
+  }
+  
+  // Select location from suggestions
+  function selectLocation(suggestion) {
+    location = suggestion.display_name;
+    showLocationSuggestions = false;
+    locationSuggestions = [];
+  }
+  
+  // Handle post submission
+  async function handlePost() {
+    if (!postTitle.trim() || !description.trim()) {
+      alert('Please fill in title and description');
+      return;
+    }
+    
+    if (!location.trim()) {
+      alert('Please enter a location');
       return;
     }
     
     submitting = true;
     try {
-      const response = await fetch('http://localhost:3001/tasks', {
+      const taskData = {
+        name: postTitle,
+        description: description,
+        location: location,
+        price: parseFloat(price) || 0,
+        type: postType,
+        images: imageBase64Array // Send base64 images
+      };
+      
+      const response = await fetch(apiUrl(API_CONFIG.endpoints.tasks), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          name: taskForm.name,
-          description: taskForm.description
-        })
+        credentials: 'include',
+        body: JSON.stringify(taskData)
       });
       
       if (response.ok) {
-        success = true;
-        setTimeout(() => {
-          goto('/search');
-        }, 2000);
+        const result = await response.json();
+        console.log('Task created successfully:', result);
+        goto('/');
       } else {
-        throw new Error('Failed to create task');
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || 'Failed to create task');
       }
     } catch (error) {
       console.error('Error creating task:', error);
-      alert('Failed to create task. Please try again.');
+      alert(`Failed to create task: ${error.message}`);
     } finally {
       submitting = false;
     }
+  }
+  
+  // User menu functions
+  function toggleUserMenu() {
+    showUserMenu = !showUserMenu;
+  }
+  
+  function toggleLanguageMenu() {
+    showLanguageMenu = !showLanguageMenu;
+  }
+  
+  function changeLanguage(lang) {
+    currentLanguage = lang;
+    localStorage.setItem('language', lang);
+    showLanguageMenu = false;
+  }
+  
+  async function handleLogout() {
+    try {
+      await fetch(apiUrl(API_CONFIG.endpoints.auth.logout), {
+        method: 'POST',
+        credentials: 'include'
+      });
+    } catch (error) {
+      console.error('Error logging out:', error);
+    }
+    isLoggedIn = false;
+    currentUser = null;
+    showUserMenu = false;
+    goto('/');
   }
 </script>
 

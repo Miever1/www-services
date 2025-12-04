@@ -7,12 +7,6 @@ const WEEK_IN_MILLISECONDS = 604800000;
 // In production, use Deno KV or Redis
 const sessions = new Map(); // sessionID -> { user, expiresAt }
 
-<<<<<<< HEAD
-  const kv = await Deno.openKv();
-  await kv.set(["sessions", sessionID], user, {
-    expireIn: WEEK_IN_MILLISECONDS,
-  });
-=======
 // Clean up expired sessions periodically
 setInterval(() => {
   const now = Date.now();
@@ -56,7 +50,6 @@ const createSession = async (c, user) => {
     console.error('[Session] Error creating session:', error);
     throw error;
   }
->>>>>>> 2363e5d66071eec9170cd5f27c81ba77e62374b4
 }
 
 const getUserFromSession = async (c) => {

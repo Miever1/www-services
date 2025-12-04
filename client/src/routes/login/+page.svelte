@@ -1,6 +1,7 @@
 <script>
   import { goto } from '$app/navigation';
   import { apiUrl, API_CONFIG } from '$lib/api-config.js';
+  import { saveUserToStorage } from '$lib/user-storage.js';
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
 
@@ -40,7 +41,8 @@
         // Store user info if returned
         if (data.user) {
           if (browser) {
-            localStorage.setItem('user', JSON.stringify(data.user));
+            // Use safe storage function to prevent QuotaExceededError
+            saveUserToStorage(data.user);
           }
         }
         goto('/');

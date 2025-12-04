@@ -10,14 +10,7 @@ const sql = postgres();
 const createTask = async (userID, task) => {
   const id = crypto.randomUUID();
   
-<<<<<<< HEAD
-  const { name, description, location, category, type, price } = task;
-  
-  const result = await sql`
-    INSERT INTO tasks (id, name, description, user_id, location, category, type, price)
-    VALUES (${id}, ${name}, ${description}, ${userID}, ${location}, ${category}, ${type}, ${price})
-=======
-  const { name, description, location, price, type } = task;
+  const { name, description, location, price, type, category, images } = task;
   
   // Validate and convert userID to UUID format
   // If userID is not a valid UUID, generate one or use a default
@@ -36,15 +29,30 @@ const createTask = async (userID, task) => {
   const taskPrice = price ? parseFloat(price) : 0;
   const taskLocation = location || 'Espoo, Finland';
   
+  // Handle images - convert to JSONB array format
+  const imagesArray = images ? (Array.isArray(images) ? images : [images]) : [];
+  
   const result = await sql`
-    INSERT INTO tasks (id, name, description, user_id, location, price, type)
-    VALUES (${id}, ${name}, ${description}, ${userIdUuid}::uuid, ${taskLocation}, ${taskPrice}, ${taskType}::task_type)
->>>>>>> 2363e5d66071eec9170cd5f27c81ba77e62374b4
+    INSERT INTO tasks (id, name, description, user_id, location, price, type, category, images)
+    VALUES (${id}, ${name}, ${description}, ${userIdUuid}::uuid, ${taskLocation}, ${taskPrice}, ${taskType}::task_type, ${category || null}, ${JSON.stringify(imagesArray)}::jsonb)
     RETURNING *;
   `;
 
-  console.log(result[0]);
-  return result[0];
+  const createdTask = result[0];
+  // Parse JSONB images field if it exists
+  if (createdTask.images) {
+    try {
+      createdTask.images = typeof createdTask.images === 'string' ? JSON.parse(createdTask.images) : createdTask.images;
+    } catch (e) {
+      console.error('Error parsing images:', e);
+      createdTask.images = [];
+    }
+  } else {
+    createdTask.images = [];
+  }
+  
+  console.log(createdTask);
+  return createdTask;
 }
 
 //Get task with id
@@ -57,23 +65,49 @@ const readTask = async (id) => {
     return null;
   }
   
-  return result[0];
+  const task = result[0];
+  // Parse JSONB images field if it exists
+  if (task.images) {
+    try {
+      task.images = typeof task.images === 'string' ? JSON.parse(task.images) : task.images;
+    } catch (e) {
+      console.error('Error parsing images:', e);
+      task.images = [];
+    }
+  } else {
+    task.images = [];
+  }
+  
+  return task;
 }
 
 //Update a task of a given ID
 const updateTask = async (id, task) => {
-  const { name, description, location, price, type } = task;
+  const { name, description, location, price, type, images } = task;
   
   const taskType = type || 'need';
   const taskPrice = price ? parseFloat(price) : 0;
   const taskLocation = location || 'Espoo, Finland';
+  
+  // Handle images if provided
+  const imagesArray = images !== undefined ? (Array.isArray(images) ? images : [images]) : null;
 
-  const result = await sql`
-    UPDATE tasks
-    SET name=${name}, description=${description}, location=${taskLocation}, price=${taskPrice}, type=${taskType}::task_type, time=CURRENT_TIMESTAMP
-    WHERE id=${id}
-    RETURNING *;
-  `;
+  let result;
+  if (imagesArray !== null) {
+    result = await sql`
+      UPDATE tasks
+      SET name=${name}, description=${description}, location=${taskLocation}, price=${taskPrice}, type=${taskType}::task_type, images=${JSON.stringify(imagesArray)}::jsonb, time=CURRENT_TIMESTAMP
+      WHERE id=${id}
+      RETURNING *;
+    `;
+  } else {
+    result = await sql`
+      UPDATE tasks
+      SET name=${name}, description=${description}, location=${taskLocation}, price=${taskPrice}, type=${taskType}::task_type, time=CURRENT_TIMESTAMP
+      WHERE id=${id}
+      RETURNING *;
+    `;
+  }
 
   return result[0];
 }
@@ -91,7 +125,20 @@ const listAllTasks = async () => {
     ORDER BY time DESC;
   `;
 
-  return result;
+  // Parse JSONB images field for each task
+  return result.map(task => {
+    if (task.images) {
+      try {
+        task.images = typeof task.images === 'string' ? JSON.parse(task.images) : task.images;
+      } catch (e) {
+        console.error('Error parsing images:', e);
+        task.images = [];
+      }
+    } else {
+      task.images = [];
+    }
+    return task;
+  });
 }
 
 const markTaskAsComplete = async (id) => {

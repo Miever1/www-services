@@ -19,7 +19,8 @@ export const API_CONFIG = {
       register: '/auth/registration',
       sendCode: '/auth/send-code',
       verifyCode: '/auth/verify-code'
-    }
+    },
+    profile: '/profile'
   }
 };
 

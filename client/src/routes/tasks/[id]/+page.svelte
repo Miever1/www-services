@@ -15,8 +15,10 @@
   let currentLanguage = 'en';
   let similarTasks = [];
   let recommendedTasks = [];
+  let selectedImageIndex = 0; // Track which image is currently displayed as main image
   
   $: taskId = $page.params.id;
+  $: currentMainImage = task && task.images && task.images.length > 0 ? task.images[selectedImageIndex] : null;
   
   // Watch for taskId changes and reload task
   $: if (taskId) {
@@ -86,6 +88,24 @@
       const data = await response.json();
       // API returns array, extract first item
       task = Array.isArray(data) ? data[0] : data;
+      
+      // Parse images if it's a string
+      if (task.images) {
+        try {
+          task.images = typeof task.images === 'string' ? JSON.parse(task.images) : task.images;
+          if (!Array.isArray(task.images)) {
+            task.images = [];
+          }
+        } catch (e) {
+          console.error('Error parsing images:', e);
+          task.images = [];
+        }
+      } else {
+        task.images = [];
+      }
+      
+      // Reset selected image index
+      selectedImageIndex = 0;
       
       console.log('Loaded task:', task);
     } catch (err) {
@@ -292,14 +312,35 @@
         <!-- Left Column: Image Gallery -->
         <div class="image-column">
           <div class="image-gallery">
-            <div class="main-image">📸</div>
-            <div class="thumbnail-gallery">
-              <div class="thumbnail">📸</div>
-              <div class="thumbnail">📸</div>
-              <div class="thumbnail">📸</div>
-              <div class="thumbnail">📸</div>
-              <div class="thumbnail">📸</div>
-            </div>
+            {#if task.images && task.images.length > 0}
+              <div class="main-image">
+                <img src={currentMainImage} alt={task.name} />
+              </div>
+              {#if task.images.length > 1}
+                <div class="thumbnail-gallery">
+                  {#each task.images.slice(0, 5) as image, index}
+                    <div 
+                      class="thumbnail" 
+                      class:active={index === selectedImageIndex}
+                      on:click={() => selectedImageIndex = index}
+                      role="button"
+                      tabindex="0"
+                    >
+                      <img src={image} alt="Thumbnail {index + 1}" />
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {:else}
+              <div class="main-image">📸✨</div>
+              <div class="thumbnail-gallery">
+                <div class="thumbnail">📸</div>
+                <div class="thumbnail">📸</div>
+                <div class="thumbnail">📸</div>
+                <div class="thumbnail">📸</div>
+                <div class="thumbnail">📸</div>
+              </div>
+            {/if}
           </div>
         </div>
         
@@ -660,6 +701,13 @@
     align-items: center;
     justify-content: center;
     font-size: 2.5rem;
+    overflow: hidden;
+  }
+  
+  .main-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   
   .thumbnail-gallery {
@@ -676,6 +724,24 @@
     align-items: center;
     justify-content: center;
     font-size: 1rem;
+    cursor: pointer;
+    overflow: hidden;
+    border: 2px solid transparent;
+    transition: all 0.2s ease;
+  }
+  
+  .thumbnail:hover {
+    border-color: #ECF86E;
+  }
+  
+  .thumbnail.active {
+    border-color: #000;
+  }
+  
+  .thumbnail img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   
   /* Post Header */

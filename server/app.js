@@ -6,6 +6,7 @@ import * as middlewares from "./middlewares.js";
 
 import * as authControl from "./auth-control.js";
 import * as taskControl from "./task-control.js";
+import * as profileControl from "./profile-control.js";
 
 const app = new Hono();
 
@@ -64,5 +65,14 @@ app.get("/auth/session", (c) => {
   // Return current user from middleware (c.user)
   return c.json({ user: c.user || null });
 });
+
+// Profile endpoints
+app.get("/profile", profileControl.getProfile);
+app.put("/profile", profileControl.updateProfile);
+app.patch("/profile", profileControl.updateProfile);
+app.post("/profile", profileControl.updateProfile); // Support POST method for compatibility
+
+// Auth profile endpoint (alias for compatibility)
+app.post("/auth/update-profile", profileControl.updateProfile);
 
 export default app;
