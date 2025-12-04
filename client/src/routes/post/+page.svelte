@@ -213,23 +213,42 @@
         console.log('Task created successfully:', result);
         goto('/');
       } else {
-        // Try to get error message from response
-        let errorMessage = 'Unknown error';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-          console.error('Server error response:', errorData);
-        } catch (parseError) {
-          // If response is not JSON, try to get text
-          try {
-            const errorText = await response.text();
-            errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`;
-            console.error('Server error (non-JSON):', errorText);
-          } catch (textError) {
-            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-            console.error('Failed to parse error response:', textError);
-          }
+        // Handle error response - only read body once
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        
+        // Check for specific status codes
+        if (response.status === 413) {
+          errorMessage = 'Request too large: The image(s) you uploaded are too large. Please try uploading smaller images or fewer images.';
+        } else if (response.status === 400) {
+          errorMessage = 'Bad request: Invalid data provided. Please check your input.';
+        } else if (response.status === 401) {
+          errorMessage = 'Unauthorized: Please log in and try again.';
+        } else if (response.status === 500) {
+          errorMessage = 'Server error: Something went wrong on the server. Please try again later.';
         }
+        
+        try {
+          // Clone the response to read it without consuming the original
+          const clonedResponse = response.clone();
+          const contentType = clonedResponse.headers.get('content-type');
+          
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await clonedResponse.json();
+            errorMessage = errorData.error || errorData.message || errorMessage;
+            console.error('Server error response:', errorData);
+          } else {
+            const errorText = await clonedResponse.text();
+            if (errorText) {
+              errorMessage = errorText;
+              console.error('Server error (text):', errorText);
+            }
+          }
+        } catch (parseError) {
+          // If we can't parse, use the status-based message
+          console.error('Failed to parse error response:', parseError);
+          console.error('Response status:', response.status, response.statusText);
+        }
+        
         throw new Error(errorMessage);
       }
     } catch (error) {
