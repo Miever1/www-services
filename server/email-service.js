@@ -155,7 +155,7 @@ export async function sendVerificationCodeEmail(email, code) {
           <p>This code will expire in <strong>5 minutes</strong>.</p>
           <p>If you didn't request this code, please ignore this email.</p>
           <div class="footer">
-            <p>© 2024 HandyGO - Aalto University</p>
+            <p>© 2025 HandyGO - Aalto University</p>
             <p>This is an automated message, please do not reply.</p>
           </div>
         </div>
@@ -177,7 +177,7 @@ This code will expire in 5 minutes.
 
 If you didn't request this code, please ignore this email.
 
-© 2024 HandyGO - Aalto University
+© 2025 HandyGO - Aalto University
 This is an automated message, please do not reply.
   `;
 

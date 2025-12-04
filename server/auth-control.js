@@ -109,34 +109,62 @@ const verifyCode = async (c) => {
 };
 
 const registerUser = async (c) => {
-  const data = await c.req.json();
-  const validationResult = validator.safeParse(data);
+  try {
+    const data = await c.req.json();
+    const validationResult = validator.safeParse(data);
 
-  if(!validationResult.success) {
-    return c.json(validationResult.error.format(), 400);
-  }
-
-  const { username, email, password, verificationCode } = data;
-
-  // Validate Aalto email
-  const normalizedEmail = email.trim().toLowerCase();
-  if (!isAaltoEmail(normalizedEmail)) {
-    return c.json({ error: "Please use an Aalto email address (@aalto.fi)" }, 400);
-  }
-
-  // Verify code if provided
-  if (verificationCode) {
-    const stored = verificationCodes.get(normalizedEmail);
-    if (!stored || stored.code !== verificationCode || Date.now() > stored.expiresAt) {
-      return c.json({ error: "Invalid or expired verification code" }, 400);
+    if(!validationResult.success) {
+      return c.json(validationResult.error.format(), 400);
     }
-    // Remove code after successful registration
-    verificationCodes.delete(normalizedEmail);
-  }
 
-  const result = await userService.createUser(username, normalizedEmail, hash(password.trim()));
-  
-  return c.json(result, 200);
+    const { username, email, password, verificationCode } = data;
+
+    // Validate Aalto email
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!isAaltoEmail(normalizedEmail)) {
+      return c.json({ error: "Please use an Aalto email address (@aalto.fi)" }, 400);
+    }
+
+    // Check if user already exists
+    const existingUser = await userService.getUserFromEmail(normalizedEmail);
+    if (existingUser && existingUser.length > 0) {
+      return c.json({ error: "An account with this email already exists. Please log in instead." }, 400);
+    }
+
+    // Verify code if provided
+    if (verificationCode) {
+      const stored = verificationCodes.get(normalizedEmail);
+      if (!stored || stored.code !== verificationCode || Date.now() > stored.expiresAt) {
+        return c.json({ error: "Invalid or expired verification code" }, 400);
+      }
+      // Remove code after successful registration
+      verificationCodes.delete(normalizedEmail);
+    }
+
+    const result = await userService.createUser(username, normalizedEmail, hash(password.trim()));
+    
+    return c.json(result, 200);
+  } catch (error) {
+    console.error('Registration error:', error);
+    
+    // Handle database constraint violations
+    if (error.code === '23505' || error.constraint_name) {
+      if (error.constraint_name === 'users_lower_idx' || error.detail?.includes('email')) {
+        return c.json({ error: "An account with this email already exists. Please log in instead." }, 400);
+      }
+      if (error.constraint_name?.includes('username')) {
+        return c.json({ error: "This username is already taken. Please choose another one." }, 400);
+      }
+    }
+    
+    // Handle other database errors
+    if (error.name === 'PostgresError') {
+      return c.json({ error: "Database error. Please try again later." }, 500);
+    }
+    
+    // Generic error handling
+    return c.json({ error: error.message || "Registration failed. Please try again." }, 500);
+  }
 }
 
 //TODO: replace error messages with generic ones
@@ -147,11 +175,9 @@ const loginUser = async (c) => {
   // Support login with either email or username
   let userResult;
   if (email) {
-    userResult = await userService.getUserFromEmail(email.trim().toLowerCase());
+    userResult = await userService.getUserFromEmail(email.trim());
   } else if (username) {
-    // If we need username lookup, add it to user-service
-    // For now, treat username as email
-    userResult = await userService.getUserFromEmail(username.trim().toLowerCase());
+    userResult = await userService.getUserFromUsername(username.trim());
   } else {
     return c.json({ error: "Email or username is required" }, 400);
   }
@@ -171,7 +197,12 @@ const loginUser = async (c) => {
       user: {
         id: user.id,
         username: user.username,
-        email: user.email
+        email: user.email,
+        name: user.name || null,
+        avatar_url: user.avatar_url || null,
+        bio: user.bio || null,
+        address: user.address || null,
+        phone: user.phone || null
       }
     });
   } else {
@@ -185,4 +216,44 @@ const logoutUser = async (c) => {
   return c.json({ message: "Session deleted." });
 }
 
-export { registerUser, loginUser, logoutUser, sendVerificationCode, verifyCode }
+// Update user profile
+const updateProfile = async (c) => {
+  if (!c.user) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const data = await c.req.json();
+  const { name, username, avatar_url, bio, address, phone } = data;
+
+  // Only allow updating profile fields (not password or email)
+  const updateData = {};
+  if (name !== undefined) updateData.name = name;
+  if (username !== undefined) updateData.username = username;
+  if (avatar_url !== undefined) updateData.avatar_url = avatar_url;
+  if (bio !== undefined) updateData.bio = bio;
+  if (address !== undefined) updateData.address = address;
+  if (phone !== undefined) updateData.phone = phone;
+
+  const result = await userService.updateUser(c.user.id, updateData);
+  
+  if (result.length === 0) {
+    return c.json({ error: "User not found" }, 404);
+  }
+
+  const updatedUser = result[0];
+  return c.json({
+    message: "Profile updated successfully",
+    user: {
+      id: updatedUser.id,
+      username: updatedUser.username,
+      email: updatedUser.email,
+      name: updatedUser.name,
+      avatar_url: updatedUser.avatar_url,
+      bio: updatedUser.bio,
+      address: updatedUser.address,
+      phone: updatedUser.phone
+    }
+  });
+}
+
+export { registerUser, loginUser, logoutUser, sendVerificationCode, verifyCode, updateProfile }

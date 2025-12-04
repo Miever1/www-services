@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docker连接诊断工具</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .test-item {
+            padding: 20px;
+            margin: 15px 0;
+            border-radius: 10px;
+            border: 2px solid #e0e0e0;
+            transition: all 0.3s;
+        }
+        .test-item.pending {
+            background: #f5f5f5;
+            border-color: #ccc;
+        }
+        .test-item.success {
+            background: #d4edda;
+            border-color: #28a745;
+        }
+        .test-item.error {
+            background: #f8d7da;
+            border-color: #dc3545;
+        }
+        .test-title {
+            font-weight: bold;
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        .test-result {
+            color: #666;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Docker服务连接诊断</h1>
+        <div id="tests"></div>
+        <button id="testBtn" onclick="runAllTests()">开始测试</button>
+        <div id="status" class="status"></div>
+    </div>
+    <script>
+        const tests = [
+            { name: '前端服务 (localhost:5173)', url: 'http://localhost:5173', type: 'html' },
+            { name: '后端API (localhost:8000/auth/session)', url: 'http://localhost:8000/auth/session', type: 'json' },
+            { name: '127.0.0.1:5173', url: 'http://127.0.0.1:5173', type: 'html' },
+            { name: '127.0.0.1:8000', url: 'http://127.0.0.1:8000/auth/session', type: 'json' }
+        ];
+        
+        function createTestElement(test) {
+            const div = document.createElement('div');
+            div.className = 'test-item pending';
+            div.id = `test-${tests.indexOf(test)}`;
+            div.innerHTML = `
+                <div class="test-title">${test.name}</div>
+                <div class="test-result">等待测试...</div>
+            `;
+            return div;
+        }
+        
+        async function runAllTests() {
+            const btn = document.getElementById('testBtn');
+            const status = document.getElementById('status');
+            btn.disabled = true;
+            status.textContent = '测试中...';
+            
+            const container = document.getElementById('tests');
+            container.innerHTML = '';
+            
+            for (const test of tests) {
+                const element = createTestElement(test);
+                container.appendChild(element);
+                
+                try {
+                    const response = await fetch(test.url, { method: 'GET' });
+                    const statusText = `HTTP ${response.status} ${response.statusText}`;
+                    
+                    let content = '';
+                    if (test.type === 'json') {
+                        const data = await response.json();
+                        content = JSON.stringify(data, null, 2);
+                    } else {
+                        const text = await response.text();
+                        content = text.substring(0, 200) + (text.length > 200 ? '...' : '');
+                    }
+                    
+                    element.className = 'test-item success';
+                    element.querySelector('.test-result').innerHTML = `
+                        <div style="color: #28a745;">✅ ${statusText}</div>
+                        <pre style="margin-top: 10px; white-space: pre-wrap;">${content}</pre>
+                    `;
+                } catch (error) {
+                    element.className = 'test-item error';
+                    element.querySelector('.test-result').innerHTML = `
+                        <div style="color: #dc3545;">❌ 连接失败</div>
+                        <div style="margin-top: 10px; color: #666;">${error.message}</div>
+                    `;
+                }
+            }
+            
+            btn.disabled = false;
+            status.textContent = '测试完成';
+            
+            // 统计结果
+            const success = container.querySelectorAll('.success').length;
+            const total = tests.length;
+            status.textContent = `测试完成: ${success}/${total} 成功`;
+        }
+        
+        // 页面加载后自动运行测试
+        window.addEventListener('load', () => {
+            setTimeout(runAllTests, 500);
+        });
+    </script>
+</body>
+</html>

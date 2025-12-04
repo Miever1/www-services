@@ -1,8 +1,9 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { apiUrl, API_CONFIG } from '$lib/api-config.js';
+  import { browser } from '$app/environment';
   
   let task = null;
   let loading = true;
@@ -15,34 +16,160 @@
   let currentLanguage = 'en';
   let similarTasks = [];
   let recommendedTasks = [];
+  let taskCreator = null; // Task creator/user information
   
   $: taskId = $page.params.id;
+  let lastLoadedTaskId = null; // Track last loaded task ID
   
-  // Watch for taskId changes and reload task
-  $: if (taskId) {
+  // Watch for taskId changes and reload task immediately when route changes
+  // This reactive statement will trigger whenever taskId changes
+  $: if (taskId && browser && taskId !== lastLoadedTaskId) {
+    console.log('🔄 Route changed - Loading task:', taskId, '(previous:', lastLoadedTaskId, ')');
+    
+    // Update lastLoadedTaskId immediately to prevent duplicate loads
+    lastLoadedTaskId = taskId;
+    
+    // Reset state when taskId changes
+    loading = true;
+    error = null;
+    task = null;
+    
+    // Load task immediately when taskId changes
     loadTask().then(() => {
-      loadRecommendations();
+      if (task) {
+        console.log('✅ Task loaded successfully:', task.id);
+        loadRecommendations();
+        // Reload favorites when task changes
+        if (browser) {
+          const savedFavorites = localStorage.getItem('favoriteTasks');
+          if (savedFavorites) {
+            favorites = new Set(JSON.parse(savedFavorites));
+          }
+        }
+      } else {
+        console.warn('⚠️ Task loaded but is null or undefined');
+      }
+    }).catch(err => {
+      console.error('❌ Error loading task:', err);
     });
   }
   
   onMount(async () => {
     // Check login status
-    const userData = localStorage.getItem('user');
-    if (userData) {
-      currentUser = JSON.parse(userData);
+    if (browser) {
+      const userData = localStorage.getItem('user');
+      if (userData) {
+        currentUser = JSON.parse(userData);
+        isLoggedIn = true;
+      }
+      
+      // Get language setting
+      const savedLanguage = localStorage.getItem('language');
+      if (savedLanguage) {
+        currentLanguage = savedLanguage;
+      }
+      
+      // Load saved favorites
+      const savedFavorites = localStorage.getItem('favoriteTasks');
+      if (savedFavorites) {
+        favorites = new Set(JSON.parse(savedFavorites));
+      }
+
+      // Listen for favorites updates from other pages
+      window.addEventListener('favoritesUpdated', handleFavoritesUpdate);
+      window.addEventListener('storage', handleStorageChange);
+      
+      // Listen for user updates from other pages/tabs
+      window.addEventListener('userUpdated', handleUserUpdate);
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'user') {
+          handleUserUpdate();
+        }
+      });
+      
+      // Also reload favorites when page becomes visible (user switches back from another tab)
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      
+      // Initialize taskId tracking
+      if (taskId) {
+        lastLoadedTaskId = taskId;
+        // Load task on initial mount
+        await loadTask();
+        if (task) {
+          loadRecommendations();
+        }
+      }
+    }
+  });
+
+  function handleFavoritesUpdate(event) {
+    if (event.detail && event.detail.favorites) {
+      favorites = new Set(event.detail.favorites);
+    }
+  }
+
+  function handleStorageChange(event) {
+    if (event.key === 'favoriteTasks' && event.newValue) {
+      favorites = new Set(JSON.parse(event.newValue));
+    }
+  }
+
+  function handleVisibilityChange() {
+    // Reload favorites when page becomes visible
+    if (!document.hidden) {
+      const savedFavorites = localStorage.getItem('favoriteTasks');
+      if (savedFavorites) {
+        favorites = new Set(JSON.parse(savedFavorites));
+      }
+    }
+  }
+  
+  function handleUserUpdate(event) {
+    console.log('Task detail page handleUserUpdate called:', event);
+    // Try to get user from event detail first, then localStorage
+    let updatedUser = null;
+    if (event && event.detail && event.detail.user) {
+      updatedUser = event.detail.user;
+      console.log('Got user from event detail:', updatedUser);
+    } else {
+      const userData = localStorage.getItem('user');
+      if (userData) {
+        try {
+          updatedUser = JSON.parse(userData);
+          console.log('Got user from localStorage:', updatedUser);
+        } catch (e) {
+          console.error('Failed to parse user data:', e);
+        }
+      }
+    }
+    
+    if (updatedUser) {
+      // Force reactivity by creating a new object
+      currentUser = { ...updatedUser };
       isLoggedIn = true;
+      console.log('Updated currentUser in task detail page:', currentUser);
+      
+      // If the updated user is the task creator, update taskCreator too
+      if (taskCreator && taskCreator.id === updatedUser.id) {
+        taskCreator = {
+          ...taskCreator,
+          ...updatedUser
+        };
+        console.log('Updated taskCreator:', taskCreator);
+      }
+    } else {
+      currentUser = null;
+      isLoggedIn = false;
     }
-    
-    // Get language setting
-    const savedLanguage = localStorage.getItem('language');
-    if (savedLanguage) {
-      currentLanguage = savedLanguage;
-    }
-    
-    // Load saved favorites
-    const savedFavorites = localStorage.getItem('favoriteTasks');
-    if (savedFavorites) {
-      favorites = new Set(JSON.parse(savedFavorites));
+  }
+
+  onDestroy(() => {
+    // Clean up event listeners
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('favoritesUpdated', handleFavoritesUpdate);
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('userUpdated', handleUserUpdate);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     }
   });
   
@@ -74,49 +201,196 @@
   };
   
   async function loadTask() {
+    if (!taskId) {
+      error = 'Task ID is missing';
+      loading = false;
+      return;
+    }
+    
     loading = true;
     error = null;
+    task = null; // Clear previous task
+    
     try {
-      const response = await fetch(apiUrl(API_CONFIG.endpoints.task(taskId)), {
+      const url = apiUrl(API_CONFIG.endpoints.task(taskId));
+      console.log('Loading task from:', url);
+      
+      const response = await fetch(url, {
         credentials: 'include' // Include cookies for session
       });
+      
       if (!response.ok) {
-        throw new Error('Task not found');
+        if (response.status === 404) {
+          throw new Error('Task not found');
+        }
+        throw new Error(`Failed to load task: ${response.status} ${response.statusText}`);
       }
+      
       const data = await response.json();
-      // API returns array, extract first item
+      // API returns single object (not array)
       task = Array.isArray(data) ? data[0] : data;
       
-      console.log('Loaded task:', task);
+      if (!task || !task.id) {
+        throw new Error('Invalid task data received');
+      }
+      
+      // Parse images if it's a string (JSON from database)
+      if (task.images) {
+        if (typeof task.images === 'string') {
+          try {
+            task.images = JSON.parse(task.images);
+          } catch (e) {
+            console.warn('Failed to parse images:', e);
+            task.images = [];
+          }
+        }
+        // Ensure images is an array
+        if (!Array.isArray(task.images)) {
+          task.images = [];
+        }
+      } else {
+        task.images = [];
+      }
+      
+      console.log('Task loaded with images:', task.images);
+      
+      // Reload favorites when task loads to ensure sync
+      if (browser) {
+        const savedFavorites = localStorage.getItem('favoriteTasks');
+        if (savedFavorites) {
+          favorites = new Set(JSON.parse(savedFavorites));
+        }
+      }
+      
+      // Load task creator information
+      if (task.user_id) {
+        await loadTaskCreator(task.user_id, task);
+      }
+      
+      console.log('Successfully loaded task:', task);
     } catch (err) {
-      error = err.message;
+      console.error('Error loading task:', err);
+      error = err.message || 'Failed to load task';
+      task = null;
     } finally {
       loading = false;
     }
   }
   
-  function toggleFavorite(taskId) {
-    if (favorites.has(taskId)) {
-      favorites.delete(taskId);
-    } else {
-      favorites.add(taskId);
-    }
-    favorites = new Set([...favorites]);
+  async function loadTaskCreator(userId, taskData) {
+    if (!userId) return;
     
-    // Save favorites to localStorage
-    localStorage.setItem('favoriteTasks', JSON.stringify([...favorites]));
+    try {
+      // Try to get user from localStorage first (if it's the current user)
+      if (browser) {
+        const userData = localStorage.getItem('user');
+        if (userData) {
+          const user = JSON.parse(userData);
+          if (user.id === userId) {
+            taskCreator = user;
+            return;
+          }
+        }
+      }
+      
+      // Try to fetch user information from API
+      try {
+        const response = await fetch(apiUrl(API_CONFIG.endpoints.user(userId)), {
+          credentials: 'include'
+        });
+        
+        if (response.ok) {
+          const userData = await response.json();
+          taskCreator = Array.isArray(userData) ? userData[0] : userData;
+          if (taskCreator && taskCreator.id) {
+            console.log('Task creator loaded from API:', taskCreator);
+            return;
+          }
+        }
+      } catch (apiError) {
+        console.warn('Failed to fetch user from API, trying fallback:', apiError);
+      }
+      
+      // Fallback: check if taskData already contains user information
+      if (taskData && (taskData.username || taskData.user_name || taskData.creator_name)) {
+        taskCreator = {
+          id: userId,
+          username: taskData.username || taskData.user_name || `User ${userId.substring(0, 8)}`,
+          name: taskData.creator_name || taskData.username || taskData.user_name || `User ${userId.substring(0, 8)}`,
+          email: taskData.user_email || null,
+          avatar_url: taskData.creator_avatar_url || null
+        };
+        console.log('Task creator loaded from task data:', taskCreator);
+        return;
+      }
+      
+      // Last resort: create a basic user object
+      taskCreator = {
+        id: userId,
+        username: `User ${userId.substring(0, 8)}`,
+        name: `User ${userId.substring(0, 8)}`,
+        email: null,
+        avatar_url: null
+      };
+      
+      console.log('Task creator loaded (basic):', taskCreator);
+    } catch (err) {
+      console.error('Error loading task creator:', err);
+      taskCreator = {
+        id: userId,
+        username: 'Unknown User',
+        name: 'Unknown User',
+        avatar_url: null
+      };
+    }
   }
   
-  function isFavorite(taskId) {
+  function toggleFavorite(taskId, event) {
+    if (event) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
+    
+    // 切换收藏状态 - 必须创建全新的Set来触发Svelte响应式更新
+    const newFavorites = new Set(favorites);
+    if (newFavorites.has(taskId)) {
+      newFavorites.delete(taskId);
+      console.log('取消收藏任务:', taskId);
+    } else {
+      newFavorites.add(taskId);
+      console.log('收藏任务:', taskId);
+    }
+    
+    // 创建全新的Set引用以强制触发响应式更新
+    favorites = new Set(newFavorites);
+    
+    // Save favorites to localStorage to sync across pages
+    if (browser) {
+      localStorage.setItem('favoriteTasks', JSON.stringify([...favorites]));
+      
+      // Dispatch custom event to notify other components
+      window.dispatchEvent(new CustomEvent('favoritesUpdated', { 
+        detail: { favorites: [...favorites] } 
+      }));
+    }
+  }
+  
+  // 响应式函数：Svelte会自动追踪favorites的变化
+  $: isFavorite = (taskId) => {
     return favorites.has(taskId);
   }
   
   function handleSendMessage() {
-    alert('Message feature coming soon!');
+    if (!task || !taskCreator) {
+      alert('Task information not loaded yet. Please wait...');
+      return;
+    }
+    // Navigate to messages page with task and other user info
+    goto(`/messages?taskId=${task.id}&otherUserId=${taskCreator.id}`);
   }
   
   function handlePayAndBuy() {
-    alert('Payment feature coming soon!');
+    goto(`/task/${taskId}/payment`);
   }
   
   function openMapNavigation(address) {
@@ -136,43 +410,91 @@
       });
       const allTasks = await response.json();
       
+      // Parse images field for each task if it exists
+      const parsedTasks = allTasks.map(t => {
+        if (t.images) {
+          if (typeof t.images === 'string') {
+            try {
+              t.images = JSON.parse(t.images);
+            } catch (e) {
+              console.warn('Failed to parse images for task:', t.id, e);
+              t.images = [];
+            }
+          }
+          if (!Array.isArray(t.images)) {
+            t.images = [];
+          }
+        } else {
+          t.images = [];
+        }
+        return t;
+      });
+      
       // Filter out current task
-      const otherTasks = allTasks.filter(t => t.id !== task.id);
+      const otherTasks = parsedTasks.filter(t => t.id !== task.id);
+      
+      // Track used task IDs to avoid duplicates
+      const usedTaskIds = new Set();
+      const recommendations = [];
       
       // Try to find similar tasks based on category
       if (task.category) {
-        similarTasks = otherTasks.filter(t => t.category === task.category).slice(0, 6);
+        const similarByCategory = otherTasks.filter(t => 
+          t.category === task.category && !usedTaskIds.has(t.id)
+        );
+        similarByCategory.forEach(t => {
+          recommendations.push(t);
+          usedTaskIds.add(t.id);
+        });
       }
       
-      // If we don't have enough similar tasks, get user's favorite tasks
-      if (similarTasks.length < 6) {
+      // If we have some recommendations, stop here - don't force fill to 6
+      // Only add more if there are no category matches
+      if (recommendations.length === 0) {
+        // If no category matches, get user's favorite tasks
         const savedFavorites = localStorage.getItem('favoriteTasks');
         if (savedFavorites) {
           const favoriteIds = JSON.parse(savedFavorites);
-          const favoriteTasks = otherTasks.filter(t => favoriteIds.includes(t.id));
-          similarTasks = [...similarTasks, ...favoriteTasks].slice(0, 6);
+          const favoriteTasks = otherTasks.filter(t => 
+            favoriteIds.includes(t.id) && !usedTaskIds.has(t.id)
+          );
+          favoriteTasks.forEach(t => {
+            recommendations.push(t);
+            usedTaskIds.add(t.id);
+          });
+        }
+        
+        // If still no recommendations, get recently viewed tasks
+        if (recommendations.length === 0) {
+          const viewedTasks = localStorage.getItem('viewedTasks');
+          if (viewedTasks) {
+            const viewedIds = JSON.parse(viewedTasks);
+            const viewedTasksList = otherTasks.filter(t => 
+              viewedIds.includes(t.id) && !usedTaskIds.has(t.id)
+            );
+            viewedTasksList.forEach(t => {
+              recommendations.push(t);
+              usedTaskIds.add(t.id);
+            });
+          }
+        }
+        
+        // If still no recommendations, get the latest tasks (but only a few)
+        if (recommendations.length === 0) {
+          const latestTasks = otherTasks
+            .sort((a, b) => new Date(b.time) - new Date(a.time))
+            .filter(t => !usedTaskIds.has(t.id))
+            .slice(0, 3); // Only get 3 latest, not force to 6
+          latestTasks.forEach(t => {
+            recommendations.push(t);
+            usedTaskIds.add(t.id);
+          });
         }
       }
       
-      // If still not enough, get recently viewed tasks
-      if (similarTasks.length < 6) {
-        const viewedTasks = localStorage.getItem('viewedTasks');
-        if (viewedTasks) {
-          const viewedIds = JSON.parse(viewedTasks);
-          const viewedTasksList = otherTasks.filter(t => viewedIds.includes(t.id));
-          similarTasks = [...similarTasks, ...viewedTasksList].slice(0, 6);
-        }
-      }
-      
-      // If still not enough, just get the latest tasks
-      if (similarTasks.length < 6) {
-        const latestTasks = otherTasks
-          .sort((a, b) => new Date(b.time) - new Date(a.time))
-          .slice(0, 6 - similarTasks.length);
-        similarTasks = [...similarTasks, ...latestTasks];
-      }
-      
-      recommendedTasks = similarTasks.slice(0, 6);
+      // Set recommendations - don't force to 6, use whatever we have
+      recommendedTasks = recommendations;
+      similarTasks = recommendations;
       
       // Mark current task as viewed
       const viewedTasks = JSON.parse(localStorage.getItem('viewedTasks') || '[]');
@@ -183,6 +505,7 @@
     } catch (error) {
       console.error('Error loading recommendations:', error);
       recommendedTasks = [];
+      similarTasks = [];
     }
   }
 </script>
@@ -204,8 +527,12 @@
           <!-- User Menu -->
           <div class="user-menu-wrapper">
             <div class="user-info" on:click={toggleUserMenu}>
-              <img src="https://ui-avatars.com/api/?name={currentUser?.name || 'User'}&background=ECF86E&color=000" alt="User Avatar" class="user-avatar" />
-              <span class="user-name">{currentUser?.name || 'User'}</span>
+              {#if currentUser?.avatar_url}
+                <img src={currentUser.avatar_url} alt="User Avatar" class="user-avatar" />
+              {:else}
+                <img src="https://ui-avatars.com/api/?name={encodeURIComponent(currentUser?.name || currentUser?.username || 'User')}&background=ECF86E&color=000" alt="User Avatar" class="user-avatar" />
+              {/if}
+              <span class="user-name">{currentUser?.name || currentUser?.username || 'User'}</span>
               <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class="dropdown-arrow">
                 <path d="M1 1L6 6L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
@@ -292,14 +619,35 @@
         <!-- Left Column: Image Gallery -->
         <div class="image-column">
           <div class="image-gallery">
-            <div class="main-image">📸</div>
-            <div class="thumbnail-gallery">
-              <div class="thumbnail">📸</div>
-              <div class="thumbnail">📸</div>
-              <div class="thumbnail">📸</div>
-              <div class="thumbnail">📸</div>
-              <div class="thumbnail">📸</div>
-            </div>
+            {#if task.images && Array.isArray(task.images) && task.images.length > 0}
+              <!-- Main Image -->
+              <div class="main-image">
+                <img src={task.images[0]?.data || task.images[0]} alt="Task image 1" />
+              </div>
+              <!-- Thumbnail Gallery -->
+              <div class="thumbnail-gallery">
+                {#each task.images.slice(0, 5) as imageObj, index}
+                  <div class="thumbnail" on:click={() => {
+                    // Swap with main image on click
+                    const temp = task.images[0];
+                    task.images[0] = task.images[index];
+                    task.images[index] = temp;
+                    task.images = [...task.images]; // Trigger reactivity
+                  }}>
+                    <img src={imageObj?.data || imageObj} alt="Thumbnail {index + 1}" />
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div class="main-image">📸</div>
+              <div class="thumbnail-gallery">
+                <div class="thumbnail">📸</div>
+                <div class="thumbnail">📸</div>
+                <div class="thumbnail">📸</div>
+                <div class="thumbnail">📸</div>
+                <div class="thumbnail">📸</div>
+              </div>
+            {/if}
           </div>
         </div>
         
@@ -307,7 +655,18 @@
         <div class="info-column">
           <!-- Title and Price -->
           <div class="post-header">
-            <h1 class="post-title">{task.name || 'Title'}</h1>
+            <div class="post-header-top">
+              <h1 class="post-title">{task.name || 'Title'}</h1>
+              <button
+                class="favorite-btn-main {isFavorite(task.id) ? 'active' : ''}" 
+                on:click={() => toggleFavorite(task.id)}
+                title={isFavorite(task.id) ? 'Remove from favorites' : 'Add to favorites'}
+              >
+                <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="24" height="24" class="heart-icon">
+                  <path d="M32 407.584A279.584 279.584 0 0 1 512 212.64a279.584 279.584 0 0 1 480 194.944 278.144 278.144 0 0 1-113.024 224.512L562.592 892.8a96 96 0 0 1-124.416-1.952L130.016 620.16A278.976 278.976 0 0 1 32 407.584z" class="heart-path"/>
+                </svg>
+              </button>
+            </div>
             <div class="post-price">
               <span class="price">{task.price ? `€${task.price}` : 'Price not set'}</span>
               <span class="price-description">{task.category || 'Category'}</span>
@@ -336,18 +695,32 @@
           </button>
           
           <!-- Helper Information -->
-          <div class="helper-card-inline">
-            <div class="helper-profile">
-              <div class="helper-avatar">👤</div>
-              <div class="helper-name">Helper Name</div>
+          {#if taskCreator}
+            <div class="helper-card-inline">
+              <div class="helper-profile">
+                {#if taskCreator?.avatar_url}
+                  <img 
+                    src={taskCreator.avatar_url} 
+                    alt="Creator Avatar" 
+                    class="helper-avatar"
+                  />
+                {:else}
+                  <img 
+                    src="https://ui-avatars.com/api/?name={encodeURIComponent(taskCreator?.name || taskCreator?.username || 'User')}&background=ECF86E&color=000" 
+                    alt="Creator Avatar" 
+                    class="helper-avatar"
+                  />
+                {/if}
+                <div class="helper-name">{taskCreator?.name || taskCreator?.username || 'Unknown User'}</div>
+              </div>
+              <button class="info-btn" on:click={() => window.location.href = `/profile?user=${taskCreator.id}`}>
+                More Information
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 6h10M6 1l5 5-5 5" stroke-linecap="round"></path>
+                </svg>
+              </button>
             </div>
-            <button class="info-btn">
-              More Information
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M1 6h10M6 1l5 5-5 5" stroke-linecap="round"></path>
-              </svg>
-            </button>
-          </div>
+          {/if}
         </div>
       </div>
       
@@ -359,6 +732,11 @@
             {#each recommendedTasks as recTask, index}
               <div class="similar-card" on:click={() => goto(`/task/${recTask.id}`)} role="button" tabindex="0">
                 <div class="card-image">
+                  {#if recTask.images && Array.isArray(recTask.images) && recTask.images.length > 0}
+                    <img src={recTask.images[0]?.data || recTask.images[0]} alt={recTask.name} />
+                  {:else}
+                    <div class="card-image-placeholder">×</div>
+                  {/if}
                   <button class="favorite-btn {isFavorite(recTask.id) ? 'active' : ''}" on:click={(e) => { e.stopPropagation(); toggleFavorite(recTask.id); }} on:mouseenter|stopPropagation>
                     <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="20" height="20" class="heart-icon">
                       <path d="M32 407.584A279.584 279.584 0 0 1 512 212.64a279.584 279.584 0 0 1 480 194.944 278.144 278.144 0 0 1-113.024 224.512L562.592 892.8a96 96 0 0 1-124.416-1.952L130.016 620.16A278.976 278.976 0 0 1 32 407.584z" class="heart-path"/>
@@ -660,6 +1038,13 @@
     align-items: center;
     justify-content: center;
     font-size: 2.5rem;
+    overflow: hidden;
+  }
+  
+  .main-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   
   .thumbnail-gallery {
@@ -676,6 +1061,21 @@
     align-items: center;
     justify-content: center;
     font-size: 1rem;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.2s ease, border-color 0.2s ease;
+    border: 2px solid transparent;
+  }
+  
+  .thumbnail:hover {
+    transform: scale(1.05);
+    border-color: #ECF86E;
+  }
+  
+  .thumbnail img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   
   /* Post Header */
@@ -684,11 +1084,63 @@
     flex-direction: column;
     gap: 0.5rem;
   }
+
+  .post-header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
   
   .post-title {
     font-size: 2rem;
     font-weight: 700;
     color: #000000;
+    flex: 1;
+    margin: 0;
+  }
+
+  .favorite-btn-main {
+    background: rgba(255, 255, 255, 0.9);
+    border: 2px solid #EAF2FD;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    padding: 0;
+  }
+
+  .favorite-btn-main:hover {
+    transform: scale(1.1);
+    border-color: #ECF86E;
+  }
+
+  .favorite-btn-main.active {
+    background: rgba(255, 0, 0, 0.1);
+    border-color: #FF0000;
+  }
+
+  .favorite-btn-main .heart-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .favorite-btn-main .heart-path {
+    fill: #999;
+    transition: fill 0.2s ease;
+  }
+
+  .favorite-btn-main.active .heart-path {
+    fill: #FF0000;
+  }
+
+  .favorite-btn-main:hover .heart-path {
+    fill: #FF6B6B;
   }
   
   .post-price {
@@ -815,10 +1267,10 @@
     height: 50px;
     background: #EAF2FD;
     border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.5rem;
+    overflow: hidden;
+    flex-shrink: 0;
+    object-fit: cover;
+    display: block;
   }
   
   .helper-name {
@@ -881,13 +1333,25 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
   }
   
-  .card-image::after {
-    content: '×';
+  .card-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  
+  .card-image-placeholder {
     position: absolute;
     font-size: 3rem;
     color: #000000;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   
   .favorite-btn {
@@ -988,5 +1452,10 @@
     }
   }
 </style>
+
+
+
+
+
 
 

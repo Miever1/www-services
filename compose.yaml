@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./client/src:/app/src
+      - ./client/static:/app/static
     ports:
       - 5173:5173
     depends_on:

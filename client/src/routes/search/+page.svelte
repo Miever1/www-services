@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { apiUrl, API_CONFIG } from '$lib/api-config.js';
@@ -55,6 +55,25 @@
       currentLanguage = savedLanguage;
     }
     
+    // Load favorites from localStorage
+    const savedFavorites = localStorage.getItem('favoriteTasks');
+    if (savedFavorites) {
+      favorites = new Set(JSON.parse(savedFavorites));
+    }
+    
+    // Listen for favorites updates from other pages
+    if (browser) {
+      window.addEventListener('favoritesUpdated', handleFavoritesUpdate);
+      window.addEventListener('storage', handleStorageChange);
+      // Listen for user updates from other pages/tabs
+      window.addEventListener('userUpdated', handleUserUpdate);
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'user') {
+          handleUserUpdate();
+        }
+      });
+    }
+    
     // Load tasks
     await loadTasks();
     
@@ -69,6 +88,65 @@
       }, 100);
     }
   });
+
+  onDestroy(() => {
+    if (browser) {
+      window.removeEventListener('favoritesUpdated', handleFavoritesUpdate);
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('userUpdated', handleUserUpdate);
+    }
+  });
+
+  function handleFavoritesUpdate(event) {
+    if (event.detail && event.detail.favorites) {
+      favorites = new Set(event.detail.favorites);
+    }
+  }
+
+  function handleStorageChange(event) {
+    if (event.key === 'favoriteTasks' && event.newValue) {
+      favorites = new Set(JSON.parse(event.newValue));
+    }
+    if (event.key === 'user' && event.newValue) {
+      // Reload user info when it changes
+      try {
+        currentUser = JSON.parse(event.newValue);
+        isLoggedIn = true;
+      } catch (e) {
+        console.error('Failed to parse user data:', e);
+      }
+    } else if (event.key === 'user' && !event.newValue) {
+      // User logged out
+      currentUser = null;
+      isLoggedIn = false;
+    }
+  }
+  
+  function handleUserUpdate(event) {
+    // Try to get user from event detail first, then localStorage
+    let updatedUser = null;
+    if (event && event.detail && event.detail.user) {
+      updatedUser = event.detail.user;
+    } else {
+      const userData = localStorage.getItem('user');
+      if (userData) {
+        try {
+          updatedUser = JSON.parse(userData);
+        } catch (e) {
+          console.error('Failed to parse user data:', e);
+        }
+      }
+    }
+    
+    if (updatedUser) {
+      // Force reactivity by creating a new object
+      currentUser = { ...updatedUser };
+      isLoggedIn = true;
+    } else {
+      currentUser = null;
+      isLoggedIn = false;
+    }
+  }
   
   function initMap() {
     if (!mapContainer || map || !L) return;
@@ -240,14 +318,17 @@
         console.warn(`Task at index ${index} is missing ID, using fallback: ${taskId}`);
       }
       
-      // Use cached coordinates if available, otherwise calculate and cache
+      // Use cached coordinates if available, otherwise calculate and cache based on task location
       let lat, lng;
       if (taskCoordinates.has(taskId)) {
         const coords = taskCoordinates.get(taskId);
         lat = coords.lat;
         lng = coords.lng;
       } else {
-        // Generate stable position based on task ID using a simple hash
+        // Try to parse coordinates from task location field or generate stable coordinates
+        const taskLocation = task?.location || '';
+        
+        // Helper function to generate stable hash from string
         function hashString(str) {
           if (!str || typeof str !== 'string') return 0;
           let hash = 0;
@@ -259,34 +340,54 @@
           return hash;
         }
         
-        // Use a combination of hash and index to ensure unique positions
-        // This prevents all markers from overlapping if task IDs are missing or identical
-        const hash = Math.abs(hashString(taskId));
-        const combinedHash = hash + (index * 7919); // Prime number for better distribution
-        
-        // Generate position around ABLOCK with visible offsets
-        // Offset range: -0.005 to +0.005 degrees (about 500 meters)
-        // This ensures markers are spread out around ABLOCK but still visible on the map
-        const latOffset = ((combinedHash % 1000 - 500) / 100000); // ±0.005 degrees
-        const lngOffset = (((combinedHash >> 10) % 1000 - 500) / 100000); // ±0.005 degrees
-        
-        // Ensure coordinates are valid numbers
-        lat = ABLOCK_LAT + latOffset;
-        lng = ABLOCK_LNG + lngOffset;
-        
-        // Validate coordinates before creating marker
-        if (isNaN(lat) || isNaN(lng) || !isFinite(lat) || !isFinite(lng) || 
-            lat < 60 || lat > 61 || lng < 24 || lng > 25) {
-          console.warn(`Invalid coordinates for task ${taskId}, using ABLOCK with index offset`);
-          // Use ABLOCK with index-based offset as fallback (spread in a grid)
-          const row = Math.floor(index / 3);
-          const col = index % 3;
-          lat = ABLOCK_LAT + (row * 0.0005) - 0.0005; // 3 rows
-          lng = ABLOCK_LNG + (col * 0.0005) - 0.0005; // 3 columns
+        // Try to parse location as coordinates (format: "lat,lng" or "[lat, lng]")
+        let parsedLat = null;
+        let parsedLng = null;
+        if (taskLocation) {
+          // Try to match coordinate patterns
+          const coordMatch = taskLocation.match(/(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/);
+          if (coordMatch) {
+            parsedLat = parseFloat(coordMatch[1]);
+            parsedLng = parseFloat(coordMatch[2]);
+            // Validate parsed coordinates (Finland area)
+            if (parsedLat >= 60 && parsedLat <= 70 && parsedLng >= 20 && parsedLng <= 32) {
+              lat = parsedLat;
+              lng = parsedLng;
+            }
+          }
         }
         
-        // Cache the coordinates
+        // If coordinates couldn't be parsed, generate stable position based on location text or task ID
+        if (!lat || !lng) {
+          // Use location text if available, otherwise use task ID for stable hash
+          const hashSource = taskLocation || taskId;
+          const hash = Math.abs(hashString(hashSource));
+          const combinedHash = hash + (index * 7919); // Prime number for better distribution
+          
+          // Generate position around ABLOCK with visible offsets
+          // Offset range: -0.01 to +0.01 degrees (about 1 km)
+          // This ensures markers are spread out around ABLOCK but still visible on the map
+          const latOffset = ((combinedHash % 2000 - 1000) / 100000); // ±0.01 degrees
+          const lngOffset = (((combinedHash >> 11) % 2000 - 1000) / 100000); // ±0.01 degrees
+          
+          lat = ABLOCK_LAT + latOffset;
+          lng = ABLOCK_LNG + lngOffset;
+          
+          // Validate coordinates before creating marker
+          if (isNaN(lat) || isNaN(lng) || !isFinite(lat) || !isFinite(lng) || 
+              lat < 60 || lat > 61 || lng < 24 || lng > 25) {
+            console.warn(`Invalid coordinates for task ${taskId}, using ABLOCK with index offset`);
+            // Use ABLOCK with index-based offset as fallback (spread in a grid)
+            const row = Math.floor(index / 3);
+            const col = index % 3;
+            lat = ABLOCK_LAT + (row * 0.001) - 0.001; // 3 rows with larger spacing
+            lng = ABLOCK_LNG + (col * 0.001) - 0.001; // 3 columns with larger spacing
+          }
+        }
+        
+        // Cache the coordinates to ensure they remain stable
         taskCoordinates.set(taskId, { lat, lng });
+        console.log(`📍 Cached coordinates for task ${taskId} (${taskLocation || 'no location'}): (${lat.toFixed(6)}, ${lng.toFixed(6)})`);
       }
       
       // Create custom icon with rank number for each marker (black modern style)
@@ -308,24 +409,100 @@
       });
       
       // Create marker with explicit coordinates to ensure stability
-      const marker = L.marker([lat, lng], { 
+      // Store the original coordinates as constants to prevent any changes
+      const originalLat = lat;
+      const originalLng = lng;
+      const originalLatLng = L.latLng(originalLat, originalLng);
+      
+      // Create marker without adding to map first
+      const marker = L.marker(originalLatLng, { 
         icon: pinIcon,
         draggable: false,
-        keyboard: false
-      }).addTo(map);
+        keyboard: false,
+        riseOnHover: false // Prevent marker from moving on hover
+      });
       
-      // Explicitly set position to ensure it doesn't change
-      marker.setLatLng([lat, lng]);
-      
-      // LOCK the marker position - prevent any code from changing it
-      const originalLatLng = [lat, lng];
+      // LOCK the marker position BEFORE adding to map
+      // Override setLatLng to always restore original position
+      const originalSetLatLng = marker.setLatLng.bind(marker);
       marker.setLatLng = function(newLatLng) {
-        // Ignore any attempts to change position - keep original position
+        // Always restore to original position - ignore any attempts to move it
         if (L && this._map) {
-          L.Marker.prototype.setLatLng.call(this, originalLatLng);
+          // Force set the internal position property
+          this._latlng = originalLatLng;
+          // Update the visual position immediately
+          if (this._updatePosition) {
+            this._updatePosition();
+          }
+          // Also update the icon position if it exists
+          if (this._icon && this._icon.parentNode) {
+            const point = this._map.latLngToLayerPoint(originalLatLng);
+            L.DomUtil.setPosition(this._icon, point);
+          }
         }
         return this;
       };
+      
+      // Also override getLatLng to always return original position
+      const originalGetLatLng = marker.getLatLng.bind(marker);
+      marker.getLatLng = function() {
+        // Always return the original locked position
+        return originalLatLng;
+      };
+      
+      // Lock the internal _latlng property
+      try {
+        Object.defineProperty(marker, '_latlng', {
+          get: function() {
+            return originalLatLng;
+          },
+          set: function(val) {
+            // Ignore any attempts to set position directly
+            // Force it back to original
+            this._latlng = originalLatLng;
+            if (this._map && this._updatePosition) {
+              this._updatePosition();
+            }
+          },
+          configurable: false
+        });
+      } catch (e) {
+        // If we can't lock it, at least ensure it's set correctly
+        marker._latlng = originalLatLng;
+      }
+      
+      // Now add to map
+      marker.addTo(map);
+      
+      // Force set position immediately after adding
+      marker.setLatLng(originalLatLng);
+      
+      // Periodically check and fix position (safety net)
+      // Use more frequent checks and immediate restoration
+      const positionCheckInterval = setInterval(() => {
+        if (!marker._map || !marker._icon) {
+          clearInterval(positionCheckInterval);
+          return;
+        }
+        const currentPos = marker.getLatLng();
+        // Check if position has moved (tolerance of 0.0001 degrees ~ 11 meters)
+        if (currentPos && (Math.abs(currentPos.lat - originalLat) > 0.0001 || Math.abs(currentPos.lng - originalLng) > 0.0001)) {
+          console.warn(`⚠️ Marker ${taskId} position changed from (${currentPos.lat.toFixed(6)}, ${currentPos.lng.toFixed(6)}) to (${originalLat.toFixed(6)}, ${originalLng.toFixed(6)})! Restoring.`);
+          // Force restore immediately
+          marker._latlng = originalLatLng;
+          if (marker._updatePosition) {
+            marker._updatePosition();
+          }
+          marker.setLatLng(originalLatLng);
+        }
+        // Always ensure _latlng property is correct
+        if (marker._latlng && (Math.abs(marker._latlng.lat - originalLat) > 0.0001 || Math.abs(marker._latlng.lng - originalLng) > 0.0001)) {
+          marker._latlng = originalLatLng;
+        }
+      }, 50); // Check every 50ms for faster response
+      
+      // Store interval ID so we can clear it if needed
+      marker._positionCheckInterval = positionCheckInterval;
       
       // Debug: log marker creation
       console.log(`Created marker #${rank} for task ${taskId} at (${lat.toFixed(6)}, ${lng.toFixed(6)}) - Position LOCKED`);
@@ -337,27 +514,61 @@
       marker._locked = true; // Mark as locked
       
       // Add click event to marker - scroll to card when clicked
+      // IMPORTANT: Lock position immediately on click to prevent movement
       marker.on('click', (e) => {
-        console.log(`📍 Marker clicked for task ${task.id}`);
-        e.originalEvent?.stopPropagation(); // Prevent map click
-        selectedTaskId = task.id;
-        // Scroll to corresponding card (only scrolls the card list, not the page)
-        scrollToCard(task.id);
+        // Prevent any default behaviors that might move the marker
+        if (e.originalEvent) {
+          e.originalEvent.preventDefault();
+          e.originalEvent.stopPropagation();
+          e.originalEvent.stopImmediatePropagation();
+        }
+        
+        // Immediately lock position before any other operations
+        marker.setLatLng(originalLatLng);
+        
+        // Use requestAnimationFrame to ensure position is locked before other updates
+        if (typeof requestAnimationFrame !== 'undefined') {
+          requestAnimationFrame(() => {
+            // Lock position again after any async operations
+            marker.setLatLng(originalLatLng);
+            console.log(`📍 Marker clicked for task ${task.id} - Position locked`);
+            
+            selectedTaskId = task.id;
+            // Scroll to corresponding card (only scrolls the card list, not the page)
+            scrollToCard(task.id);
+          });
+        } else {
+          marker.setLatLng(originalLatLng);
+          console.log(`📍 Marker clicked for task ${task.id} - Position locked`);
+          selectedTaskId = task.id;
+          scrollToCard(task.id);
+        }
       });
       
       // Add hover events for visual feedback (highlight marker)
-      marker.on('mouseover', () => {
+      marker.on('mouseover', (e) => {
+        // Lock position on hover to prevent any movement
+        marker.setLatLng(originalLatLng);
         selectedTaskId = task.id;
         // Just highlight, don't scroll on hover
       });
       
       marker.on('mouseout', () => {
+        // Lock position on mouseout as well
+        marker.setLatLng(originalLatLng);
         // Don't clear immediately, let card hover take over if mouse moves there
         setTimeout(() => {
+          marker.setLatLng(originalLatLng); // Lock again after timeout
           if (selectedTaskId === task.id) {
             selectedTaskId = null;
           }
         }, 100);
+      });
+      
+      // Lock position on any other events that might cause movement
+      marker.on('dragstart drag dragend', (e) => {
+        e.preventDefault();
+        marker.setLatLng(originalLatLng);
       });
       
       markers.push(marker);
@@ -373,35 +584,92 @@
     markersInitialized = true;
   }
   
-  // Watch for hoveredTask changes and highlight corresponding marker
-  // IMPORTANT: This ONLY changes marker styling (opacity, scale, z-index), NEVER position
-  $: if (hoveredTask && map && markers.length > 0 && markersInitialized) {
-    markers.forEach((marker) => {
-      // DO NOT touch marker position here - only change visual styling
-      if (marker._taskId === hoveredTask.id) {
-        // Highlight the hovered marker
-        marker.setOpacity(1);
-        marker.setZIndexOffset(1000);
-        const iconElement = marker._icon;
-        if (iconElement) {
-          iconElement.style.transform = 'scale(1.3)';
-          iconElement.style.transition = 'transform 0.2s ease';
+  // Watch for hoveredTask or selectedTaskId changes and highlight corresponding marker
+  // IMPORTANT: This ONLY changes marker styling (opacity, scale, z-index, color), NEVER position
+  $: if (map && markers.length > 0 && markersInitialized) {
+    const highlightedTaskId = hoveredTask?.id || selectedTaskId;
+    
+    // Use requestAnimationFrame to ensure DOM is ready
+    if (typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(() => {
+        markers.forEach((marker) => {
+          if (!marker._icon || !marker._map) return; // Skip if marker not ready
+          
+          // DO NOT touch marker position here - only change visual styling
+          if (highlightedTaskId && marker._taskId === highlightedTaskId) {
+            // Highlight the hovered/selected marker with enhanced styling
+            marker.setOpacity(1);
+            marker.setZIndexOffset(1000);
+            const iconElement = marker._icon;
+            if (iconElement) {
+              iconElement.style.transform = 'scale(1.4)';
+              iconElement.style.transition = 'transform 0.2s ease, filter 0.2s ease';
+              iconElement.style.filter = 'drop-shadow(0 4px 12px rgba(236, 248, 110, 0.8))';
+              iconElement.style.zIndex = '1000';
+              // Change pin color to yellow/green for highlighted state
+              const svg = iconElement.querySelector('svg path');
+              if (svg) {
+                svg.setAttribute('fill', '#ECF86E');
+              }
+            }
+          } else {
+            // Dim other markers
+            marker.setOpacity(0.5);
+            marker.setZIndexOffset(0);
+            const iconElement = marker._icon;
+            if (iconElement) {
+              iconElement.style.transform = 'scale(1)';
+              iconElement.style.filter = 'none';
+              iconElement.style.zIndex = 'auto';
+              // Restore original black color
+              const svg = iconElement.querySelector('svg path');
+              if (svg) {
+                svg.setAttribute('fill', '#000000');
+              }
+            }
+          }
+        });
+      });
+    } else {
+      // Fallback if requestAnimationFrame is not available
+      markers.forEach((marker) => {
+        if (!marker._icon || !marker._map) return;
+        
+        if (highlightedTaskId && marker._taskId === highlightedTaskId) {
+          marker.setOpacity(1);
+          marker.setZIndexOffset(1000);
+          const iconElement = marker._icon;
+          if (iconElement) {
+            iconElement.style.transform = 'scale(1.4)';
+            iconElement.style.transition = 'transform 0.2s ease, filter 0.2s ease';
+            iconElement.style.filter = 'drop-shadow(0 4px 12px rgba(236, 248, 110, 0.8))';
+            iconElement.style.zIndex = '1000';
+            const svg = iconElement.querySelector('svg path');
+            if (svg) {
+              svg.setAttribute('fill', '#ECF86E');
+            }
+          }
+        } else {
+          marker.setOpacity(0.5);
+          marker.setZIndexOffset(0);
+          const iconElement = marker._icon;
+          if (iconElement) {
+            iconElement.style.transform = 'scale(1)';
+            iconElement.style.filter = 'none';
+            iconElement.style.zIndex = 'auto';
+            const svg = iconElement.querySelector('svg path');
+            if (svg) {
+              svg.setAttribute('fill', '#000000');
+            }
+          }
         }
-      } else {
-        // Dim other markers
-        marker.setOpacity(0.4);
-        marker.setZIndexOffset(0);
-        const iconElement = marker._icon;
-        if (iconElement) {
-          iconElement.style.transform = 'scale(1)';
-        }
-      }
-    });
+      });
+    }
   }
   
-  // Reset marker opacity when no task is hovered
+  // Reset marker opacity and styling when no task is hovered/selected
   // IMPORTANT: This ONLY changes marker styling, NEVER position
-  $: if (!hoveredTask && map && markers.length > 0 && markersInitialized) {
+  $: if (!hoveredTask && !selectedTaskId && map && markers.length > 0 && markersInitialized) {
     markers.forEach(marker => {
       // DO NOT touch marker position here - only reset visual styling
       marker.setOpacity(1);
@@ -409,6 +677,13 @@
       const iconElement = marker._icon;
       if (iconElement) {
         iconElement.style.transform = 'scale(1)';
+        iconElement.style.filter = 'none';
+        iconElement.style.zIndex = 'auto';
+        // Restore original black color
+        const svg = iconElement.querySelector('svg path');
+        if (svg) {
+          svg.setAttribute('fill', '#000000');
+        }
       }
     });
   }
@@ -447,20 +722,31 @@
     isLoggedIn = false;
     currentUser = null;
     showUserMenu = false;
+    // Dispatch event to notify other pages
+    if (browser) {
+      window.dispatchEvent(new CustomEvent('userUpdated'));
+    }
+    window.location.href = '/login';
+  }
+  
+  function toggleUserMenu() {
+    console.log('toggleUserMenu called, current showUserMenu:', showUserMenu);
+    showUserMenu = !showUserMenu;
+    console.log('toggleUserMenu new showUserMenu:', showUserMenu);
+  }
+  
+  function toggleLanguageMenu() {
+    console.log('toggleLanguageMenu called, current showLanguageMenu:', showLanguageMenu);
+    showLanguageMenu = !showLanguageMenu;
+    console.log('toggleLanguageMenu new showLanguageMenu:', showLanguageMenu);
   }
   
   function changeLanguage(lang) {
     currentLanguage = lang;
-    localStorage.setItem('language', lang);
+    if (browser) {
+      localStorage.setItem('language', lang);
+    }
     showLanguageMenu = false;
-  }
-  
-  function toggleUserMenu() {
-    showUserMenu = !showUserMenu;
-  }
-  
-  function toggleLanguageMenu() {
-    showLanguageMenu = !showLanguageMenu;
   }
   
   const languages = {
@@ -512,7 +798,27 @@
       });
       const allTasks = await response.json();
       
-      let filteredTasks = allTasks;
+      // Parse images field for each task if it exists
+      const parsedTasks = allTasks.map(task => {
+        if (task.images) {
+          if (typeof task.images === 'string') {
+            try {
+              task.images = JSON.parse(task.images);
+            } catch (e) {
+              console.warn('Failed to parse images for task:', task.id, e);
+              task.images = [];
+            }
+          }
+          if (!Array.isArray(task.images)) {
+            task.images = [];
+          }
+        } else {
+          task.images = [];
+        }
+        return task;
+      });
+      
+      let filteredTasks = parsedTasks;
       
       // Filter by search query
       if (searchQuery) {
@@ -733,17 +1039,39 @@
   }
   
   function toggleFavorite(taskId, event) {
-    event.stopPropagation();
-    if (favorites.has(taskId)) {
-      favorites.delete(taskId);
-    } else {
-      favorites.add(taskId);
+    // 完全阻止事件传播，确保不会影响其他元素
+    if (event) {
+      event.stopPropagation();
+      event.preventDefault();
+      event.stopImmediatePropagation();
     }
-    // 创建新的 Set 以触发响应式更新
-    favorites = new Set([...favorites]);
+    
+    // 切换收藏状态 - 必须创建全新的Set来触发Svelte响应式更新
+    const newFavorites = new Set(favorites);
+    if (newFavorites.has(taskId)) {
+      newFavorites.delete(taskId);
+      console.log('取消收藏任务:', taskId);
+    } else {
+      newFavorites.add(taskId);
+      console.log('收藏任务:', taskId);
+    }
+    
+    // 创建全新的Set引用以强制触发响应式更新
+    favorites = new Set(newFavorites);
+    
+    // 使用tick()确保DOM更新
+    if (browser) {
+      // Save to localStorage to sync across pages
+      localStorage.setItem('favoriteTasks', JSON.stringify([...favorites]));
+      // Dispatch custom event to notify other components
+      window.dispatchEvent(new CustomEvent('favoritesUpdated', { 
+        detail: { favorites: [...favorites] } 
+      }));
+    }
   }
   
-  function isFavorite(taskId) {
+  // 响应式函数：Svelte会自动追踪favorites的变化
+  $: isFavorite = (taskId) => {
     return favorites.has(taskId);
   }
 </script>
@@ -756,24 +1084,28 @@
   <!-- Navigation Header -->
   <header class="header">
     <div class="container">
-      <div class="nav-left">
+      <a href="/" class="nav-left" on:click={(e) => { e.preventDefault(); e.stopPropagation(); console.log('HandyGO logo clicked, navigating to home'); window.location.href = '/'; }}>
         <img src="/favicon.png" alt="HandyGO" class="logo-icon" />
         <h1 class="logo">HandyGO</h1>
-      </div>
+      </a>
       <nav class="nav-right">
         {#if isLoggedIn}
           <!-- User Menu -->
           <div class="user-menu-wrapper">
-            <div class="user-info" on:click={toggleUserMenu}>
-              <img src="https://ui-avatars.com/api/?name={currentUser?.name || 'User'}&background=ECF86E&color=000" alt="User Avatar" class="user-avatar" />
-              <span class="user-name">{currentUser?.name || 'User'}</span>
+            <div class="user-info" on:click={() => { console.log('User info clicked!'); toggleUserMenu(); }}>
+              {#if currentUser?.avatar_url}
+                <img src={currentUser.avatar_url} alt="User Avatar" class="user-avatar" />
+              {:else}
+                <img src="https://ui-avatars.com/api/?name={encodeURIComponent(currentUser?.name || currentUser?.username || 'User')}&background=ECF86E&color=000" alt="User Avatar" class="user-avatar" />
+              {/if}
+              <span class="user-name">{currentUser?.name || currentUser?.username || 'User'}</span>
               <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class="dropdown-arrow">
                 <path d="M1 1L6 6L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
             </div>
             {#if showUserMenu}
               <div class="user-dropdown">
-                <a href="/profile" class="dropdown-item">
+                <a href="/profile" class="dropdown-item" on:click={(e) => { e.preventDefault(); e.stopPropagation(); console.log('Profile link clicked'); window.location.href = '/profile'; }}>
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M8 8C10.2091 8 12 6.20914 12 4C12 1.79086 10.2091 0 8 0C5.79086 0 4 1.79086 4 4C4 6.20914 5.79086 8 8 8Z" fill="currentColor"/>
                     <path d="M0 14C0 10.6863 2.68629 8 6 8H10C13.3137 8 16 10.6863 16 14V16H0V14Z" fill="currentColor"/>
@@ -807,8 +1139,8 @@
           </button>
         {:else}
           <!-- Login/Register Buttons -->
-          <button class="btn-login" on:click={() => goto('/login')}>Login</button>
-          <button class="btn-register" on:click={() => goto('/register')}>Register</button>
+          <button class="btn-login" on:click={(e) => { e.preventDefault(); e.stopPropagation(); console.log('Login button clicked'); window.location.href = '/login'; }}>Login</button>
+          <button class="btn-register" on:click={(e) => { e.preventDefault(); e.stopPropagation(); console.log('Register button clicked'); window.location.href = '/register'; }}>Register</button>
         {/if}
         
         <!-- Language Selector -->
@@ -920,25 +1252,103 @@
             {#each tasks as task, index}
               {@const timeInfo = formatTimeAgo(task.time)}
               {@const rank = index + 1}
+              {@const isTaskFavorite = favorites.has(task.id)}
               <div 
                 class="result-card {selectedTaskId === task.id ? 'selected' : ''}"
                 data-task-id={task.id}
-                on:click={() => goto(`/task/${task.id}`)}
-                on:keydown={(e) => { if (e.key === 'Enter') goto(`/task/${task.id}`); }}
+                on:click={(e) => {
+                  // Don't navigate if clicking on favorite button or its children
+                  const clickedFavoriteBtn = e.target.closest('.favorite-btn') || 
+                                             e.target.closest('.heart-icon') || 
+                                             e.target.closest('.heart-path');
+                  
+                  if (clickedFavoriteBtn) {
+                    // User clicked favorite button, don't navigate
+                    return;
+                  }
+                  
+                  // Validate task and task.id before navigation
+                  if (!task) {
+                    console.error('❌ Task is null or undefined');
+                    return;
+                  }
+                  
+                  if (!task.id) {
+                    console.error('❌ Task ID is missing:', task);
+                    return;
+                  }
+                  
+                  // Ensure task.id is a string
+                  const taskId = String(task.id).trim();
+                  if (!taskId || taskId === 'undefined' || taskId === 'null') {
+                    console.error('❌ Invalid task ID:', taskId, 'from task:', task);
+                    return;
+                  }
+                  
+                  console.log('🔵 Card clicked, navigating to task:', taskId);
+                  console.log('🔵 Full task object:', task);
+                  const targetUrl = `/task/${taskId}`;
+                  console.log('🔵 Target URL:', targetUrl);
+                  
+                  // Use window.location for reliable navigation
+                  if (browser && window.location) {
+                    console.log('🚀 Navigating to:', targetUrl);
+                    window.location.href = targetUrl;
+                  } else {
+                    // Fallback to goto
+                    goto(targetUrl, {
+                      invalidateAll: true,
+                      keepFocus: false,
+                      replaceState: false
+                    }).then(() => {
+                      console.log('✅ Navigation completed via goto');
+                    }).catch(err => {
+                      console.error('❌ Navigation error:', err);
+                    });
+                  }
+                }}
+                on:keydown={(e) => { 
+                  if (e.key === 'Enter') {
+                    const clickedFavoriteBtn = e.target.closest('.favorite-btn');
+                    if (!clickedFavoriteBtn && task && task.id) {
+                      console.log('Navigating to task (Enter key):', task.id);
+                      goto(`/task/${task.id}`).catch(err => {
+                        console.error('Navigation error:', err);
+                      });
+                    }
+                  }
+                }}
                 on:mouseenter={(e) => handleCardHover(task, e)}
                 on:mouseleave={handleCardLeave}
                 role="button"
                 tabindex="0"
               >
                 <div class="rank-badge">#{rank}</div>
-                <div class="card-image-placeholder">📸</div>
+                {#if task.images && Array.isArray(task.images) && task.images.length > 0}
+                  <div class="card-image">
+                    <img src={task.images[0]?.data || task.images[0]} alt={task.name} />
+                  </div>
+                {:else}
+                  <div class="card-image-placeholder">📸</div>
+                {/if}
                 <button 
-                  class="favorite-btn {isFavorite(task.id) ? 'active' : ''}" 
-                  on:click={(e) => toggleFavorite(task.id, e)}
+                  type="button"
+                  class="favorite-btn {isTaskFavorite ? 'active' : ''}" 
+                  on:click={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    toggleFavorite(task.id, e);
+                  }}
                   on:mouseenter|stopPropagation
-                  title={isFavorite(task.id) ? 'Remove from favorites' : 'Add to favorites'}
+                  on:mouseleave|stopPropagation
+                  on:mousedown|stopPropagation
+                  on:mouseup|stopPropagation
+                  on:pointerdown|stopPropagation
+                  on:pointerup|stopPropagation
+                  title={isTaskFavorite ? 'Remove from favorites' : 'Add to favorites'}
                 >
-                  <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="20" height="20" class="heart-icon">
+                  <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="20" height="20" class="heart-icon" on:click|stopPropagation on:mousedown|stopPropagation>
                     <path d="M32 407.584A279.584 279.584 0 0 1 512 212.64a279.584 279.584 0 0 1 480 194.944 278.144 278.144 0 0 1-113.024 224.512L562.592 892.8a96 96 0 0 1-124.416-1.952L130.016 620.16A278.976 278.976 0 0 1 32 407.584z" class="heart-path"/>
                   </svg>
                 </button>
@@ -966,7 +1376,13 @@
         {:else}
           <div class="no-results">
             <p>No tasks found.</p>
-            <a href="/post" class="post-task-btn">Post a Task</a>
+            <a href="/post" class="post-task-btn" on:click|preventDefault={(e) => {
+              if (!isLoggedIn) {
+                goto('/login?redirect=/post');
+              } else {
+                goto('/post');
+              }
+            }}>Post a Task</a>
           </div>
         {/if}
       </section>
@@ -991,6 +1407,16 @@
 </main>
 
 <style>
+  :global(body) {
+    height: 100vh;
+    overflow: hidden;
+  }
+  
+  :global(html) {
+    height: 100vh;
+    overflow: hidden;
+  }
+  
   * {
     margin: 0;
     padding: 0;
@@ -1004,19 +1430,24 @@
   }
   
   .search-page {
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    position: relative;
   }
+  
   
   /* Header Styles */
   .header {
     background: #FFFFFF;
     border-bottom: 1px solid #EAF2FD;
-    position: sticky;
-    top: 0;
-    z-index: 100;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 10000 !important;
     flex-shrink: 0;
+    pointer-events: auto !important;
+    isolation: isolate;
   }
   
   .header .container {
@@ -1024,13 +1455,44 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 20px;
+    pointer-events: auto !important;
+    position: relative;
+    z-index: 10001 !important;
+  }
+  
+  .header * {
+    pointer-events: auto !important;
+  }
+  
+  .header a,
+  .header button,
+  .header div[role="button"],
+  .header div[on\:click] {
+    pointer-events: auto !important;
+    cursor: pointer !important;
+    position: relative;
+    z-index: 10002 !important;
   }
   
   .nav-left {
     display: flex;
     align-items: center;
     gap: 15px;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: auto;
+    position: relative;
+    z-index: 10;
+    text-decoration: none;
+    color: inherit;
   }
+  
+  .nav-left:hover {
+    opacity: 0.7;
+  }
+  
   
   .logo-icon {
     width: 32px;
@@ -1050,6 +1512,15 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+    pointer-events: auto !important;
+    position: relative;
+    z-index: 10;
+  }
+  
+  .nav-right button,
+  .nav-right a,
+  .nav-right div {
+    pointer-events: auto !important;
   }
   
   /* Buttons */
@@ -1106,16 +1577,29 @@
   /* User Menu */
   .user-menu-wrapper {
     position: relative;
+    pointer-events: auto !important;
+    z-index: 10010 !important;
   }
   
   .user-info {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    cursor: pointer;
+    cursor: pointer !important;
     padding: 0.5rem;
     border-radius: 8px;
     transition: all 0.2s ease;
+    pointer-events: auto !important;
+    position: relative;
+    z-index: 10011 !important;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+  }
+  
+  .user-info * {
+    pointer-events: none !important;
   }
   
   .user-info:hover {
@@ -1147,8 +1631,9 @@
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
     min-width: 180px;
-    z-index: 1000;
+    z-index: 10001 !important;
     overflow: hidden;
+    pointer-events: auto !important;
   }
   
   .dropdown-item {
@@ -1189,9 +1674,16 @@
     color: #666;
     font-weight: 500;
     padding: 0.5rem;
-    cursor: pointer;
+    cursor: pointer !important;
     border-radius: 8px;
     transition: all 0.2s ease;
+    pointer-events: auto !important;
+    position: relative;
+    z-index: 10011 !important;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
   
   .language-btn:hover {
@@ -1208,14 +1700,18 @@
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
     min-width: 150px;
-    z-index: 1000;
+    z-index: 10001 !important;
     overflow: hidden;
+    pointer-events: auto !important;
   }
   
   .search-main {
     flex: 1;
     display: flex;
     overflow: hidden;
+    min-height: 0;
+    position: relative;
+    z-index: 1;
   }
   
   .search-container {
@@ -1224,6 +1720,9 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
+    min-height: 0;
+    position: relative;
+    z-index: 1;
   }
   
   /* Left Panel: Filters */
@@ -1231,7 +1730,12 @@
     background: #FFFFFF;
     border-right: 1px solid #EAF2FD;
     padding: 1.5rem;
-    overflow-y: auto;
+    overflow-y: hidden;
+    overflow-x: hidden;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
   
   .search-bar {
@@ -1328,6 +1832,9 @@
     background: #FFFFFF;
     padding: 1.5rem;
     overflow-y: auto;
+    overflow-x: hidden;
+    height: 100%;
+    min-height: 0;
   }
   
   .loading {
@@ -1391,6 +1898,21 @@
     font-size: 3rem;
   }
   
+  .card-image {
+    width: 100%;
+    height: 180px;
+    background: #EAF2FD;
+    overflow: hidden;
+    position: relative;
+  }
+  
+  .card-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  
   .favorite-btn {
     position: absolute;
     top: 1rem;
@@ -1405,8 +1927,9 @@
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
-    z-index: 10;
+    z-index: 100;
     pointer-events: auto;
+    isolation: isolate;
   }
   
   .favorite-btn:hover {

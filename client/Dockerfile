@@ -11,6 +11,9 @@ RUN npm install
 # Copy source code (node_modules excluded via .dockerignore)
 COPY . .
 
+# Ensure leaflet is installed
+RUN npm list leaflet || npm install leaflet
+
 # Expose port
 EXPOSE 5173
 

@@ -19,10 +19,10 @@ setInterval(() => {
 
 const createSession = async (c, user) => {
   try {
-    const sessionID = crypto.randomUUID();
+  const sessionID = crypto.randomUUID();
     
     // Set cookie
-    await setSignedCookie(c, "session-id", sessionID, secret, {
+  await setSignedCookie(c, "session-id", sessionID, secret, {
       path: "/",
       httpOnly: true,
       sameSite: "lax",
@@ -38,10 +38,10 @@ const createSession = async (c, user) => {
 
     // Try Deno KV if available (for production)
     try {
-      const kv = await Deno.openKv();
+  const kv = await Deno.openKv();
       await kv.set(["sessions", sessionID], user, {
-        expireIn: WEEK_IN_MILLISECONDS,
-      });
+    expireIn: WEEK_IN_MILLISECONDS,
+  });
     } catch (e) {
       // Deno KV not available, use in-memory store
       console.log('[Session] Using in-memory session store (Deno KV not available)');
@@ -54,10 +54,10 @@ const createSession = async (c, user) => {
 
 const getUserFromSession = async (c) => {
   try {
-    const sessionID = await getSignedCookie(c, secret, "session-id");
+  const sessionID = await getSignedCookie(c, secret, "session-id");
     if (!sessionID) {
-      return null;
-    }
+    return null;
+  }
 
     // Try in-memory store first
     const sessionData = sessions.get(sessionID);
@@ -73,18 +73,18 @@ const getUserFromSession = async (c) => {
 
     // Try Deno KV if available
     try {
-      const kv = await Deno.openKv();
-      const user = await kv.get(["sessions", sessionID]);
-      const foundUser = user?.value ?? null;
-      if (!foundUser) {
-        return null;
-      }
+  const kv = await Deno.openKv();
+  const user = await kv.get(["sessions", sessionID]);
+  const foundUser = user?.value ?? null;
+  if (!foundUser) {
+    return null;
+  }
 
-      await kv.set(["sessions", sessionID], foundUser, {
-        expireIn: WEEK_IN_MILLISECONDS,
-      });
+  await kv.set(["sessions", sessionID], foundUser, {
+    expireIn: WEEK_IN_MILLISECONDS,
+  });
 
-      return foundUser;
+  return foundUser;
     } catch (e) {
       // Deno KV not available, return null
       return null;
@@ -97,23 +97,23 @@ const getUserFromSession = async (c) => {
 
 const deleteSession = async (c) => {
   try {
-    const sessionID = await getSignedCookie(c, secret, "session-id");
+  const sessionID = await getSignedCookie(c, secret, "session-id");
     if (!sessionID) {
       return;
-    }
+  }
 
     // Delete from in-memory store
     sessions.delete(sessionID);
 
     // Delete cookie
-    deleteCookie(c, "session-id", {
-      path: "/"
-    });
+  deleteCookie(c, "session-id", {
+    path: "/"
+  });
 
     // Try Deno KV if available
     try {
-      const kv = await Deno.openKv();
-      await kv.delete(["sessions", sessionID]);
+  const kv = await Deno.openKv();
+  await kv.delete(["sessions", sessionID]);
     } catch (e) {
       // Deno KV not available, ignore
     }

@@ -1,25 +1,129 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
+  import { apiUrl, API_CONFIG } from '$lib/api-config.js';
+  import { browser } from '$app/environment';
   
   let isLoggedIn = false;
   let currentUser = null;
   let showUserMenu = false;
   let showLanguageMenu = false;
   let currentLanguage = 'en';
+  let avatarUpdateKey = 0; // Force avatar refresh
   
-  onMount(() => {
-    // 从localStorage检查登录状态
-    const userData = localStorage.getItem('user');
-    if (userData) {
-      currentUser = JSON.parse(userData);
-      isLoggedIn = true;
+  async function checkLoginStatus() {
+    if (!browser) return;
+    
+    try {
+      const response = await fetch(apiUrl(API_CONFIG.endpoints.auth.session), {
+        credentials: 'include'
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.user) {
+          currentUser = data.user;
+          isLoggedIn = true;
+          localStorage.setItem('user', JSON.stringify(data.user));
+        } else {
+          isLoggedIn = false;
+          currentUser = null;
+          localStorage.removeItem('user');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to check login status:', err);
+      // Fallback to localStorage if API fails
+      const userData = localStorage.getItem('user');
+      if (userData) {
+        try {
+          currentUser = JSON.parse(userData);
+          isLoggedIn = true;
+        } catch (e) {
+          isLoggedIn = false;
+        }
+      }
+    }
+  }
+  
+  async function handleUserUpdate(event) {
+    console.log('handleUserUpdate called:', event);
+    // Try to get user from event detail first, then localStorage
+    let updatedUser = null;
+    if (event && event.detail && event.detail.user) {
+      updatedUser = event.detail.user;
+      console.log('Got user from event detail:', updatedUser);
+      console.log('Avatar URL in event:', updatedUser.avatar_url);
+    } else {
+      const userData = localStorage.getItem('user');
+      if (userData) {
+        try {
+          updatedUser = JSON.parse(userData);
+          console.log('Got user from localStorage:', updatedUser);
+          console.log('Avatar URL in localStorage:', updatedUser.avatar_url);
+        } catch (e) {
+          console.error('Failed to parse user data:', e);
+        }
+      }
     }
     
+    if (updatedUser) {
+      // Force reactivity by creating a completely new object with all fields
+      const newUser = {
+        id: updatedUser.id,
+        username: updatedUser.username || '',
+        email: updatedUser.email || '',
+        name: updatedUser.name || null,
+        avatar_url: updatedUser.avatar_url !== undefined && updatedUser.avatar_url !== null ? updatedUser.avatar_url : null, // Preserve empty strings but handle undefined/null
+        bio: updatedUser.bio || null,
+        address: updatedUser.address || null,
+        phone: updatedUser.phone || null
+      };
+      // Use JSON parse/stringify to force deep reactivity
+      currentUser = null; // First set to null to trigger change
+      await tick(); // Wait for DOM update
+      currentUser = JSON.parse(JSON.stringify(newUser));
+      isLoggedIn = true;
+      // Force reactivity by reassigning
+      currentUser = { ...currentUser };
+      avatarUpdateKey = Date.now(); // Force avatar refresh
+      await tick(); // Wait for DOM update after setting new value
+      // Force another update after tick
+      avatarUpdateKey = Date.now() + 1;
+      await tick();
+      console.log('Updated currentUser:', currentUser);
+      console.log('Avatar update key:', avatarUpdateKey);
+      console.log('Current user avatar_url:', currentUser.avatar_url);
+      console.log('Current user avatar_url type:', typeof currentUser.avatar_url);
+      console.log('Current user avatar_url length:', currentUser.avatar_url ? currentUser.avatar_url.length : 'null');
+      console.log('Will avatar show?', currentUser?.avatar_url && currentUser.avatar_url.trim() !== '' ? 'YES' : 'NO');
+      console.log('Avatar URL preview:', currentUser?.avatar_url ? currentUser.avatar_url.substring(0, 100) + '...' : 'null');
+    } else {
+      currentUser = null;
+      isLoggedIn = false;
+    }
+  }
+  
+  onMount(() => {
     // 从localStorage获取语言设置
     const savedLanguage = localStorage.getItem('language');
     if (savedLanguage) {
       currentLanguage = savedLanguage;
+    }
+    
+    // 检查登录状态
+    checkLoginStatus();
+    
+    // Listen for user updates from other tabs/pages
+    if (browser) {
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'user') {
+          handleUserUpdate();
+        }
+      });
+      
+      // Also listen for custom events within the same tab
+      window.addEventListener('userUpdated', handleUserUpdate);
     }
   });
   
@@ -69,8 +173,37 @@
           <!-- User Menu -->
           <div class="user-menu-wrapper">
             <div class="user-info" on:click={toggleUserMenu}>
-              <img src="https://ui-avatars.com/api/?name={currentUser?.name || 'User'}&background=ECF86E&color=000" alt="User Avatar" class="user-avatar" />
-              <span class="user-name">{currentUser?.name || 'User'}</span>
+              {#if currentUser?.avatar_url}
+                {@const hasCustomAvatar = currentUser.avatar_url && currentUser.avatar_url.trim() !== ''}
+                {#if hasCustomAvatar}
+                  <img 
+                    src={currentUser.avatar_url}
+                    alt="User Avatar" 
+                    class="user-avatar"
+                    key={currentUser.id + '_avatar_' + avatarUpdateKey}
+                    on:load={() => console.log('Avatar image loaded successfully:', currentUser.avatar_url?.substring(0, 50))}
+                    on:error={(e) => {
+                      console.error('Failed to load avatar image:', currentUser.avatar_url?.substring(0, 50));
+                      e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser?.name || currentUser?.username || 'User')}&background=ECF86E&color=000`;
+                    }}
+                  />
+                {:else}
+                  <img 
+                    src="https://ui-avatars.com/api/?name={encodeURIComponent(currentUser?.name || currentUser?.username || 'User')}&background=ECF86E&color=000" 
+                    alt="User Avatar" 
+                    class="user-avatar"
+                    key={currentUser?.id || 'default'}
+                  />
+                {/if}
+              {:else}
+                <img 
+                  src="https://ui-avatars.com/api/?name={encodeURIComponent(currentUser?.name || currentUser?.username || 'User')}&background=ECF86E&color=000" 
+                  alt="User Avatar" 
+                  class="user-avatar"
+                  key={currentUser?.id || 'default'}
+                />
+              {/if}
+              <span class="user-name">{currentUser?.name || currentUser?.username || 'User'}</span>
               <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class="dropdown-arrow">
                 <path d="M1 1L6 6L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
@@ -152,7 +285,13 @@
         <!-- Action Buttons -->
         <div class="action-buttons">
           <button class="action-btn" on:click={() => goto('/search')}>Search for help</button>
-          <button class="action-btn" on:click={() => goto('/post')}>Post a task</button>
+          <button class="action-btn" on:click={() => {
+            if (!isLoggedIn) {
+              goto('/login?redirect=/post');
+            } else {
+              goto('/post');
+            }
+          }}>Post a task</button>
         </div>
       </div>
     </div>
@@ -190,27 +329,45 @@
       
       <!-- Our Advantage Section -->
       <div class="advantage-section">
-        <div class="advantage-image">
-          <div class="placeholder-image">Our Advantage</div>
+        <div class="advantage-hero">
+          <!-- Left content area - empty for now -->
         </div>
         <div class="advantage-list">
-          <div class="advantage-item">
-            <span class="advantage-letter">A.</span>
-            <p>Verified student community ensuring safety and trust.</p>
+          <div class="advantage-card">
+            <div class="advantage-card-header">
+              <span class="advantage-letter">A</span>
+              <div class="advantage-icon">✓</div>
+            </div>
+            <h4 class="advantage-card-title">Verified Community</h4>
+            <p class="advantage-card-description">Verified student community ensuring safety and trust.</p>
           </div>
-          <div class="advantage-item">
-            <span class="advantage-letter">B.</span>
-            <p>Quick response time with campus-wide coverage.</p>
+          <div class="advantage-card">
+            <div class="advantage-card-header">
+              <span class="advantage-letter">B</span>
+              <div class="advantage-icon">⚡</div>
+            </div>
+            <h4 class="advantage-card-title">Quick Response</h4>
+            <p class="advantage-card-description">Quick response time with campus-wide coverage.</p>
           </div>
-          <div class="advantage-item">
-            <span class="advantage-letter">C.</span>
-            <p>Affordable prices designed for student budgets.</p>
+          <div class="advantage-card">
+            <div class="advantage-card-header">
+              <span class="advantage-letter">C</span>
+              <div class="advantage-icon">💰</div>
+            </div>
+            <h4 class="advantage-card-title">Affordable Prices</h4>
+            <p class="advantage-card-description">Affordable prices designed for student budgets.</p>
           </div>
-          <div class="advantage-item">
-            <span class="advantage-letter">D.</span>
-            <p>Secure payment system with full transaction protection.</p>
+          <div class="advantage-card">
+            <div class="advantage-card-header">
+              <span class="advantage-letter">D</span>
+              <div class="advantage-icon">🔒</div>
+            </div>
+            <h4 class="advantage-card-title">Secure Payment</h4>
+            <p class="advantage-card-description">Secure payment system with full transaction protection.</p>
           </div>
-          <a href="/post" class="advantage-btn">Register as a helper</a>
+          {#if !isLoggedIn}
+            <a href="/register" class="advantage-btn">Register as a helper</a>
+          {/if}
         </div>
       </div>
     </div>
@@ -255,7 +412,7 @@
         </div>
       </div>
       <div class="footer-bottom">
-        <p>&copy; 2024 HandyGO - CS-E4400 Design of WWW Services</p>
+        <p>&copy; 2025 HandyGO - CS-E4400 Design of WWW Services</p>
       </div>
     </div>
   </footer>
@@ -906,52 +1063,110 @@
   /* Advantage Section */
   .advantage-section {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 3rem;
+    grid-template-columns: 1fr 1.2fr;
+    gap: 4rem;
     margin-top: 4rem;
-    align-items: start;
+    align-items: stretch;
   }
   
-  .advantage-image {
-    background: #EAF2FD;
-    border-radius: 12px;
-    padding: 2rem;
-    min-height: 400px;
+  .advantage-hero {
+    position: relative;
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+    min-height: 100%;
+    background: linear-gradient(135deg, #EAF2FD 0%, #F8FFCB 100%);
+    padding: 3rem;
     display: flex;
-    align-items: center;
+    flex-direction: column;
     justify-content: center;
   }
   
-  .placeholder-image {
-    text-align: center;
-    color: #666;
-    font-size: 1.2rem;
-    font-weight: 600;
-  }
-  
   .advantage-list {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
   }
   
-  .advantage-item {
+  .advantage-card {
+    background: #FFFFFF;
+    border: 2px solid #EAF2FD;
+    border-radius: 16px;
+    padding: 1.25rem;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: default;
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .advantage-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: #ECF86E;
+    transform: scaleY(0);
+    transform-origin: bottom;
+    transition: transform 0.3s ease;
+  }
+  
+  .advantage-card:hover {
+    border-color: #ECF86E;
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
+  }
+  
+  .advantage-card:hover::before {
+    transform: scaleY(1);
+  }
+  
+  .advantage-card-header {
     display: flex;
-    gap: 1rem;
-    align-items: flex-start;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
   }
   
   .advantage-letter {
-    font-size: 1.5rem;
-    font-weight: 700;
+    font-size: 2rem;
+    font-weight: 800;
     color: #ECF86E;
-    min-width: 2rem;
+    line-height: 1;
+    font-family: 'Inter', sans-serif;
   }
   
-  .advantage-item p {
+  .advantage-icon {
+    font-size: 1.5rem;
+    width: 40px;
+    height: 40px;
+    background: #F8FFCB;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+  }
+  
+  .advantage-card:hover .advantage-icon {
+    background: #ECF86E;
+    transform: rotate(5deg) scale(1.1);
+  }
+  
+  .advantage-card-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #000000;
+    margin-bottom: 0.5rem;
+    margin-top: 0;
+  }
+  
+  .advantage-card-description {
     color: #666;
     line-height: 1.6;
     margin: 0;
+    font-size: 0.95rem;
   }
   
   .advantage-btn {
@@ -959,15 +1174,22 @@
     color: #000000;
     text-decoration: none;
     padding: 1rem 2rem;
-    border-radius: 8px;
+    border-radius: 12px;
     font-weight: 600;
-    transition: background-color 0.2s ease;
-    display: inline-block;
-    margin-top: 1rem;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1.5rem;
+    box-shadow: 0 4px 12px rgba(236, 248, 110, 0.3);
+    width: 100%;
+    text-align: center;
   }
   
   .advantage-btn:hover {
     background: #E0F055;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(236, 248, 110, 0.4);
   }
   
   /* Responsive Design */
@@ -1022,8 +1244,52 @@
       gap: 2rem;
     }
     
-    .advantage-image {
-      min-height: 200px;
+    .advantage-hero {
+      min-height: 300px;
+      padding: 2rem;
+    }
+    
+    .advantage-hero-title {
+      font-size: 2rem;
+    }
+    
+    .advantage-hero-subtitle {
+      font-size: 1rem;
+    }
+    
+    .advantage-stats {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    
+    .stat-number {
+      font-size: 1.5rem;
+    }
+    
+    .stat-label {
+      font-size: 0.75rem;
+    }
+    
+    .feature-item {
+      padding: 0.5rem;
+    }
+    
+    .feature-item svg {
+      width: 20px;
+      height: 20px;
+    }
+    
+    .feature-item span {
+      font-size: 0.85rem;
+    }
+    
+    .advantage-card {
+      padding: 1.25rem;
+    }
+    
+    .advantage-letter {
+      font-size: 1.5rem;
     }
   }
 </style>
