@@ -1,0 +1,81 @@
+name: Fix Nginx Config Only
+
+on:
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  Fix-Nginx:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix Nginx config for large file uploads
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "🔧 修复 Nginx 配置以支持大文件上传..."
+            
+            CONFIG_FILE="/etc/nginx/sites-available/default"
+            
+            # 检查文件是否存在
+            if [ ! -f "$CONFIG_FILE" ]; then
+              echo "❌ 配置文件不存在: $CONFIG_FILE"
+              exit 1
+            fi
+            
+            # 备份
+            BACKUP="$CONFIG_FILE.backup.$(date +%Y%m%d-%H%M%S)"
+            sudo cp "$CONFIG_FILE" "$BACKUP"
+            echo "✅ 已备份到: $BACKUP"
+            
+            # 在 server { 块添加 client_max_body_size
+            if ! grep -q "client_max_body_size.*50M" "$CONFIG_FILE"; then
+              # 尝试多种匹配模式
+              if sudo sed -i '/^[[:space:]]*server[[:space:]]*{/a\    client_max_body_size 50M;' "$CONFIG_FILE" 2>/dev/null; then
+                echo "✅ 添加了 server 块的 client_max_body_size 50M"
+              elif sudo sed -i '/server[[:space:]]*{/a\    client_max_body_size 50M;' "$CONFIG_FILE" 2>/dev/null; then
+                echo "✅ 添加了 server 块的 client_max_body_size 50M"
+              else
+                echo "⚠️  无法自动添加 server 块配置，需要手动编辑"
+              fi
+            else
+              echo "✅ server 块已有 client_max_body_size 50M"
+            fi
+            
+            # 在 location /api { 块添加 client_max_body_size
+            if grep -q "location[[:space:]]*/api" "$CONFIG_FILE"; then
+              if ! grep -A 10 "location[[:space:]]*/api" "$CONFIG_FILE" | grep -q "client_max_body_size.*50M"; then
+                if sudo sed -i '/location[[:space:]]*\/api[[:space:]]*{/a\        client_max_body_size 50M;' "$CONFIG_FILE" 2>/dev/null; then
+                  echo "✅ 添加了 location /api 块的 client_max_body_size 50M"
+                else
+                  echo "⚠️  无法自动添加 location /api 块配置"
+                fi
+              else
+                echo "✅ location /api 块已有 client_max_body_size 50M"
+              fi
+            else
+              echo "⚠️  未找到 location /api 块"
+            fi
+            
+            # 测试配置
+            echo ""
+            echo "🧪 测试 Nginx 配置..."
+            if sudo nginx -t; then
+              echo "✅ 配置测试通过"
+              echo "🔄 重新加载 Nginx..."
+              sudo systemctl reload nginx
+              echo ""
+              echo "================================"
+              echo "✅ 修复完成！"
+              echo "================================"
+              echo ""
+              echo "验证配置:"
+              sudo nginx -T 2>/dev/null | grep "client_max_body_size" || echo "（未找到）"
+            else
+              echo "❌ 配置测试失败，正在恢复备份..."
+              sudo cp "$BACKUP" "$CONFIG_FILE"
+              echo "✅ 已恢复备份"
+              exit 1
+            fi
+
