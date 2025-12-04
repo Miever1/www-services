@@ -21,14 +21,16 @@ const allowedOrigins = [
 app.use("/*", cors({
   origin: (origin) => {
     // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return true;
+    if (!origin) return '*';
     // Check if origin is in allowed list
-    if (allowedOrigins.includes(origin)) return true;
+    if (allowedOrigins.includes(origin)) {
+      return origin; // Return the actual origin string
+    }
     // Allow any localhost origin for development
     if (origin.startsWith('http://localhost:') || origin.startsWith('https://localhost:')) {
-      return true;
+      return origin; // Return the actual origin string
     }
-    return false;
+    return null; // Block this origin
   },
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
