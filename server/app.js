@@ -11,10 +11,27 @@ import * as profileControl from "./profile-control.js";
 const app = new Hono();
 
 // CORS configuration to allow frontend access
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:8000',
+  'https://baicloud.miever.net',
+  'http://baicloud.miever.net'
+];
+
 app.use("/*", cors({
-  origin: ['http://localhost:5173', 'http://localhost:8000'],
+  origin: (origin) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return true;
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) return true;
+    // Allow any localhost origin for development
+    if (origin.startsWith('http://localhost:') || origin.startsWith('https://localhost:')) {
+      return true;
+    }
+    return false;
+  },
   credentials: true,
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use("/*", logger());        //For logging requests to this URL

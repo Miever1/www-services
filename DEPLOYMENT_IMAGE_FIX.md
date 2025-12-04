@@ -136,6 +136,8 @@ sudo tail -f /var/log/nginx/access.log | grep -i "413\|400\|500"
 
 ## 快速修复步骤
 
+### 第一步：修复 Nginx 配置（最重要！）
+
 1. **SSH 到部署服务器**
    ```bash
    ssh ubuntu@your-server-ip
@@ -146,23 +148,105 @@ sudo tail -f /var/log/nginx/access.log | grep -i "413\|400\|500"
    sudo nano /etc/nginx/sites-available/default
    # 或
    sudo nano /etc/nginx/nginx.conf
+   # 或
+   sudo nano /etc/nginx/sites-available/baicloud.miever.net
    ```
 
-3. **添加或修改以下配置**
+3. **确保有以下配置**（完整的 server 块示例）：
    ```nginx
-   client_max_body_size 50M;
+   server {
+       listen 80;
+       listen [::]:80;
+       server_name baicloud.miever.net;
+       
+       # ⚠️ 重要：允许大的请求体（上传图片需要）
+       client_max_body_size 50M;
+       client_body_timeout 300s;
+       
+       # 前端静态文件
+       location / {
+           root /home/ubuntu/www-service/frontend;
+           try_files $uri $uri/ /index.html;
+       }
+       
+       # ⚠️ 后端 API 反向代理（必须配置！）
+       location /api {
+           proxy_pass http://localhost:8000;
+           
+           # ⚠️ 重要：允许大的请求体
+           client_max_body_size 50M;
+           client_body_timeout 300s;
+           
+           # 代理超时设置
+           proxy_read_timeout 300s;
+           proxy_connect_timeout 300s;
+           proxy_send_timeout 300s;
+           
+           # 代理头设置
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           
+           # 缓冲区设置
+           proxy_buffer_size 128k;
+           proxy_buffers 4 256k;
+           proxy_busy_buffers_size 256k;
+       }
+   }
    ```
 
 4. **测试并重启 Nginx**
    ```bash
-   sudo nginx -t
-   sudo systemctl reload nginx
+   sudo nginx -t          # 测试配置语法
+   sudo systemctl reload nginx  # 重新加载配置
+   # 或
+   sudo service nginx reload
    ```
 
-5. **检查后端日志**
+### 第二步：检查后端服务
+
+5. **检查后端是否运行**
    ```bash
+   pm2 list
    pm2 logs www-backend --lines 50
    ```
 
-6. **重新测试上传**
+6. **如果后端未运行，启动它**
+   ```bash
+   cd /home/ubuntu/www-service/backend
+   pm2 start npm --name www-backend -- start
+   ```
+
+### 第三步：测试 API
+
+7. **测试 API 是否可访问**
+   ```bash
+   curl -v https://baicloud.miever.net/api/tasks
+   # 或
+   curl -v http://localhost:8000/tasks
+   ```
+
+8. **检查错误日志**
+   ```bash
+   # Nginx 错误日志
+   sudo tail -f /var/log/nginx/error.log
+   
+   # 后端日志
+   pm2 logs www-backend
+   ```
+
+### 第四步：重新测试
+
+9. **在浏览器中测试上传任务**
+   - 打开 https://baicloud.miever.net/post
+   - 尝试上传一个带图片的任务
+   - 打开浏览器开发者工具（F12）
+   - 查看 Network 标签页，检查请求和响应
+   - 查看 Console 标签页，检查错误信息
+
+10. **如果还有问题，检查：**
+    - Network 标签页中的请求状态码（413 = 请求体太大，404 = 路由未找到，500 = 服务器错误）
+    - Console 中的错误信息
+    - 服务器日志中的详细错误
 
