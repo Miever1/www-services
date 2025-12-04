@@ -244,15 +244,24 @@
             task.images = [];
           }
         }
-        // Ensure images is an array
+        // Ensure images is an array and filter out empty values
         if (!Array.isArray(task.images)) {
           task.images = [];
+        } else {
+          // Filter out null, undefined, and empty strings
+          task.images = task.images.filter(img => {
+            if (!img) return false;
+            if (typeof img === 'string' && img.trim() === '') return false;
+            if (typeof img === 'object' && !img.data && !img.url) return false;
+            return true;
+          });
         }
       } else {
         task.images = [];
       }
       
       console.log('Task loaded with images:', task.images);
+      console.log('Number of images:', task.images.length);
       
       // Reload favorites when task loads to ensure sync
       if (browser) {
@@ -624,28 +633,33 @@
               <div class="main-image">
                 <img src={task.images[0]?.data || task.images[0]} alt="Task image 1" />
               </div>
-              <!-- Thumbnail Gallery -->
-              <div class="thumbnail-gallery">
-                {#each task.images.slice(0, 5) as imageObj, index}
-                  <div class="thumbnail" on:click={() => {
-                    // Swap with main image on click
-                    const temp = task.images[0];
-                    task.images[0] = task.images[index];
-                    task.images[index] = temp;
-                    task.images = [...task.images]; // Trigger reactivity
-                  }}>
-                    <img src={imageObj?.data || imageObj} alt="Thumbnail {index + 1}" />
-                  </div>
-                {/each}
-              </div>
+              <!-- Thumbnail Gallery - Only show if more than 1 image -->
+              {#if task.images.length > 1}
+                <div class="thumbnail-gallery">
+                  {#each task.images.slice(0, 5) as imageObj, index}
+                    <div class="thumbnail" on:click={() => {
+                      // Swap with main image on click
+                      const temp = task.images[0];
+                      task.images[0] = task.images[index];
+                      task.images[index] = temp;
+                      task.images = [...task.images]; // Trigger reactivity
+                    }}>
+                      <img src={imageObj?.data || imageObj} alt="Thumbnail {index + 1}" />
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             {:else}
-              <div class="main-image">📸</div>
-              <div class="thumbnail-gallery">
-                <div class="thumbnail">📸</div>
-                <div class="thumbnail">📸</div>
-                <div class="thumbnail">📸</div>
-                <div class="thumbnail">📸</div>
-                <div class="thumbnail">📸</div>
+              <!-- No images placeholder - show a simple placeholder -->
+              <div class="main-image">
+                <div class="no-image-placeholder">
+                  <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                  </svg>
+                  <p>No images available</p>
+                </div>
               </div>
             {/if}
           </div>
@@ -1045,6 +1059,25 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+  
+  .no-image-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    color: #999;
+    padding: 2rem;
+  }
+  
+  .no-image-placeholder svg {
+    opacity: 0.5;
+  }
+  
+  .no-image-placeholder p {
+    margin: 0;
+    font-size: 0.9rem;
   }
   
   .thumbnail-gallery {
