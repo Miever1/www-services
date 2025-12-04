@@ -17,11 +17,28 @@ const createTask = async (c) => {
 const showTask = async (c) => {
   const id = c.req.param('id');
 
-  const result = await taskService.readTask(id)
-  if(!result) {
-    return c.json({ message: "task not found" }, 404);
+  try {
+    const result = await taskService.readTask(id);
+    if(!result) {
+      return c.json({ message: "task not found" }, 404);
+    }
+    
+    // Log response size for debugging
+    const responseSize = JSON.stringify(result).length;
+    if (result.images && Array.isArray(result.images) && result.images.length > 0) {
+      const totalImageSize = result.images.reduce((sum, img) => {
+        if (typeof img === 'string') return sum + img.length;
+        if (img && img.data) return sum + img.data.length;
+        return sum;
+      }, 0);
+      console.log(`Show task ${id}: Response size: ${responseSize} bytes, Images total: ${totalImageSize} bytes`);
+    }
+    
+    return c.json(result, 200);
+  } catch (error) {
+    console.error(`Error showing task ${id}:`, error);
+    return c.json({ error: 'Failed to get task', message: error.message }, 500);
   }
-  return c.json(result, 200);
 }
 
 const updateTask = async (c) => {
@@ -40,9 +57,31 @@ const deleteTask = async (c) => {
 }
 
 const listAllTasks = async (c) => {
-  const result = await taskService.listAllTasks();
+  try {
+    const result = await taskService.listAllTasks();
 
-  return c.json(result, 200);
+    // Calculate response size for logging
+    const responseSize = JSON.stringify(result).length;
+    console.log(`List tasks: Returning ${result.length} tasks, response size: ${responseSize} bytes`);
+
+    // For list view, only return first image to reduce response size
+    // Full images will be loaded when viewing individual task details
+    const optimizedResult = result.map(task => {
+      if (task.images && Array.isArray(task.images) && task.images.length > 0) {
+        // Only return first image for list view
+        return { ...task, images: [task.images[0]] };
+      }
+      return task;
+    });
+
+    const optimizedSize = JSON.stringify(optimizedResult).length;
+    console.log(`List tasks: Optimized response size: ${optimizedSize} bytes`);
+
+    return c.json(optimizedResult, 200);
+  } catch (error) {
+    console.error('Error listing tasks:', error);
+    return c.json({ error: 'Failed to list tasks', message: error.message }, 500);
+  }
 }
 
 const markTaskAsComplete = async(c) => {
