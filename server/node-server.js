@@ -58,7 +58,9 @@ app.use(cors({
   ],
   credentials: true        // ⭐ 这里必须为 true，前端才能带 cookie
 }));
-app.use(express.json());
+app.use(express.json({
+  limit: '20mb'
+}));
 
 // 把 session 挂到 req.user 上
 app.use((req, res, next) => {
@@ -80,42 +82,48 @@ let tasks = [
     name: 'Package Pickup from A Bloc',
     description: 'Need someone to pick up a package from the post office at A Bloc. The package is from Amazon and I can provide the tracking number.',
     time: new Date('2025-01-15T10:30:00Z').toISOString(),
-    completed: false
+    completed: false,
+    images: []
   },
   {
     id: '2',
     name: 'Print Documents at Library',
     description: 'Need 20 pages printed for my thesis. I have the PDF files ready and can send them via email.',
     time: new Date('2025-01-15T14:15:00Z').toISOString(),
-    completed: false
+    completed: false,
+    images: []
   },
   {
     id: '3',
     name: 'Grocery Shopping at K-Citymarket',
     description: 'Small grocery run to K-Citymarket Otaniemi. I have a shopping list and can provide payment.',
     time: new Date('2025-01-14T16:45:00Z').toISOString(),
-    completed: true
+    completed: true,
+    images: []
   },
   {
     id: '4',
     name: 'Lend Calculator for Exam',
     description: 'Need to borrow a scientific calculator for my math exam tomorrow. Will return it the same day.',
     time: new Date('2025-01-14T09:20:00Z').toISOString(),
-    completed: false
+    completed: false,
+    images: []  
   },
   {
     id: '5',
     name: 'Deliver Books to B Bloc',
     description: 'Need someone to deliver 3 textbooks to a friend at B Bloc. Books are ready for pickup.',
     time: new Date('2025-01-13T11:00:00Z').toISOString(),
-    completed: true
+    completed: true,
+    images: []
   },
   {
     id: '6',
     name: 'Help with Moving Boxes',
     description: 'Need help carrying 5 boxes from my dorm to a friend\'s apartment. Should take about 30 minutes.',
     time: new Date('2025-01-13T13:30:00Z').toISOString(),
-    completed: false
+    completed: false,
+    images: []
   }
 ];
 
@@ -132,7 +140,8 @@ app.get('/tasks/:id', (req, res) => {
 });
 
 app.post('/tasks', (req, res) => {
-  const { name, description } = req.body;
+  // ⬅ 把前端传来的字段都解构出来
+  const { name, description, location, price, type, images } = req.body || {};
 
   if (!name || !description) {
     return res.status(400).json({ error: 'Name and description are required' });
@@ -140,8 +149,12 @@ app.post('/tasks', (req, res) => {
 
   const newTask = {
     id: (tasks.length + 1).toString(),
-    name,
-    description,
+    name: String(name).trim(),
+    description: String(description).trim(),
+    location: location || '',
+    price: typeof price === 'number' ? price : parseFloat(price) || 0,
+    type: type === 'offer' ? 'offer' : 'need',
+    images: Array.isArray(images) ? images : [],
     time: new Date().toISOString(),
     completed: false
   };
