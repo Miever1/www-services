@@ -1,7 +1,0 @@
-CREATE TABLE tasks (
-  id UUID PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL,
-  time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  completed BOOLEAN DEFAULT false
-);

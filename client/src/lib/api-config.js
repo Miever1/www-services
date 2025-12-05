@@ -18,22 +18,20 @@ export const API_CONFIG = {
       logout: '/auth/logout',
       register: '/auth/registration',
       sendCode: '/auth/send-code',
-      verifyCode: '/auth/verify-code',
-      updateProfile: '/auth/update-profile'
+      verifyCode: '/auth/verify-code'
     },
-    messages: {
-      send: '/messages',
-      conversations: '/messages/conversations',
-      conversation: (taskId, otherUserId) => `/messages/task/${taskId}?otherUserId=${otherUserId}`,
-      messages: (taskId, otherUserId) => `/messages/task/${taskId}/messages?otherUserId=${otherUserId}`
-    },
-    users: '/users',
-    user: (id) => `/users/${id}`
+    profile: '/profile'
   }
 };
 
 // Helper function to build full URL
 export function apiUrl(path) {
+  // Guard against undefined or null path
+  if (!path || typeof path !== 'string') {
+    console.error('apiUrl: Invalid path provided:', path);
+    throw new Error(`Invalid API path: ${path}`);
+  }
+  
   // If path already starts with http, return as is
   if (path.startsWith('http')) {
     return path;

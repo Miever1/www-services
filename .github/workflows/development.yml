@@ -1,0 +1,143 @@
+name: Development
+
+on:
+  push:
+    branches: 
+      - 'feature/**'
+
+jobs:
+  Development-Deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 拉代码
+      - name: Checkout repo
+        uses: actions/checkout@v2
+
+      # 2. 安装 Node 环境
+      - name: Setup Node
+        uses: actions/setup-node@v2
+        with:
+          node-version: 18
+
+      # 3. 环境变量加载（保留，不影响后端）
+      - name: Load env
+        uses: skiddph/actions-env@v1.0.2
+        with:
+          prefix: ""
+
+      # =========================
+      # 前端：SvelteKit 静态构建
+      # =========================
+      - name: Install frontend deps
+        working-directory: ./client
+        run: npm install
+
+      - name: Build frontend
+        working-directory: ./client
+        env:
+          VITE_API_URL: "/api"        # ⭐ 这里新增：生产环境的 API 基地址
+        run: npm run build
+
+      - name: Deploy frontend via SFTP
+        uses: wlixcc/SFTP-Deploy-Action@v1.0 
+        with:  
+          username: 'ubuntu'
+          server: '${{ secrets.SERVER_IP }}'
+          ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          local_path: './client/build/*'
+          remote_path: '/home/ubuntu/www-service/frontend'
+
+      # =========================
+      # 后端：同步 server 代码
+      # =========================
+      - name: Deploy backend via SFTP
+        uses: wlixcc/SFTP-Deploy-Action@v1.0
+        with:
+          username: 'ubuntu'
+          server: '${{ secrets.SERVER_IP }}'
+          ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          local_path: './server/*'
+          remote_path: '/home/ubuntu/www-service/backend'
+
+      # =========================
+      # 后端：写入 project.env + 安装依赖 + 用 pm2 重启
+      # =========================
+      - name: Install backend deps and restart via PM2
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/ubuntu/www-service/backend
+
+            cat > project.env << 'EOF'
+            POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+
+            FLYWAY_USER=${{ secrets.FLYWAY_USER }}
+            FLYWAY_PASSWORD=${{ secrets.FLYWAY_PASSWORD }}
+            FLYWAY_URL=${{ secrets.FLYWAY_URL }}
+
+            PGUSER=${{ secrets.PGUSER }}
+            PGPASSWORD=${{ secrets.PGPASSWORD }}
+            PGDATABASE=${{ secrets.PGDATABASE }}
+            PGHOST=${{ secrets.PGHOST }}
+            PGPORT=${{ secrets.PGPORT }}
+
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            COOKIE_KEY=${{ secrets.COOKIE_KEY }}
+
+            SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
+            SENDGRID_FROM_EMAIL=${{ secrets.SENDGRID_FROM_EMAIL }}
+            SENDGRID_FROM_NAME=${{ secrets.SENDGRID_FROM_NAME }}
+            EOF
+
+            # 2. 安装依赖
+            npm install --omit=dev
+
+            # 3. 用 pm2 启动或重启后端（要求 server/package.json 有 "start"）
+            pm2 start npm --name www-backend -- start || pm2 restart www-backend
+
+      # =========================
+      # 自动修复 Nginx 配置（解决上传照片失败问题）
+      # =========================
+      - name: Fix Nginx config for large file uploads
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "🔧 修复 Nginx 配置以支持大文件上传..."
+            
+            CONFIG_FILE="/etc/nginx/sites-available/default"
+            
+            # 备份
+            sudo cp "$CONFIG_FILE" "$CONFIG_FILE.backup.$(date +%Y%m%d-%H%M%S)"
+            
+            # 在 server { 块添加 client_max_body_size
+            if ! grep -q "client_max_body_size.*50M" "$CONFIG_FILE"; then
+              sudo sed -i '/^[[:space:]]*server[[:space:]]*{/a\    client_max_body_size 50M;' "$CONFIG_FILE" || \
+              sudo sed -i '/server[[:space:]]*{/a\    client_max_body_size 50M;' "$CONFIG_FILE"
+              echo "✅ 添加了 server 块的 client_max_body_size 50M"
+            fi
+            
+            # 在 location /api { 块添加 client_max_body_size
+            if grep -q "location[[:space:]]*/api" "$CONFIG_FILE"; then
+              if ! grep -A 10 "location[[:space:]]*/api" "$CONFIG_FILE" | grep -q "client_max_body_size.*50M"; then
+                sudo sed -i '/location[[:space:]]*\/api[[:space:]]*{/a\        client_max_body_size 50M;' "$CONFIG_FILE"
+                echo "✅ 添加了 location /api 块的 client_max_body_size 50M"
+              fi
+            fi
+            
+            # 测试并重载
+            if sudo nginx -t; then
+              sudo systemctl reload nginx
+              echo "✅ Nginx 配置已更新并重载"
+            else
+              echo "❌ Nginx 配置测试失败"
+              exit 1
+            fi

@@ -1,51 +1,140 @@
-# 🔧 快速修复指南
+# 🚀 快速修复指南 - 3 步解决 HTTP 413 错误
 
-## 问题
-浏览器无法连接到后端API (localhost:8000)，显示 "Failed to fetch" 错误。
+## 方法 1：使用自动修复脚本（推荐）
 
-## ⚡ 快速解决方案
+### 步骤 1：SSH 连接到服务器
+```bash
+ssh ubuntu@your-server-ip
+```
 
-### 方案1: Chrome浏览器设置（推荐）
+### 步骤 2：下载并运行自动修复脚本
+```bash
+# 下载脚本（从 GitHub 仓库）
+cd /tmp
+wget https://raw.githubusercontent.com/Miever1/www-services/feature/test/auto-fix-nginx.sh
+# 或者直接创建文件并复制内容
 
-1. **打开Chrome标志页**：
-   - 在地址栏输入：`chrome://flags/#block-insecure-private-network-requests`
-   - 或者：`chrome://flags/` 然后搜索 "Block insecure private network requests"
+# 运行脚本
+sudo bash auto-fix-nginx.sh
+```
 
-2. **禁用该选项**：
-   - 找到 "Block insecure private network requests"
-   - 设置为 **Disabled**
+脚本会自动：
+- ✅ 备份配置文件
+- ✅ 找到正确的配置文件
+- ✅ 添加 `client_max_body_size 50M;`
+- ✅ 测试配置
+- ✅ 重新加载 Nginx
 
-3. **重启Chrome浏览器**
+### 步骤 3：测试
+打开 https://baicloud.miever.net/post 并尝试上传任务
 
-4. **测试连接**：
-   - 访问：http://localhost:5173
-   - 尝试登录或查看网站功能
+---
 
-### 方案2: 使用Safari浏览器
+## 方法 2：手动修复（如果脚本不工作）
 
-Safari通常没有这个问题：
-- 直接访问 http://localhost:5173
-- 应该可以正常工作
+### 步骤 1：SSH 连接到服务器
+```bash
+ssh ubuntu@your-server-ip
+```
 
-### 方案3: 直接测试网站
+### 步骤 2：找到配置文件
+```bash
+# 查找配置文件
+sudo ls -la /etc/nginx/sites-available/
+sudo ls -la /etc/nginx/sites-enabled/
 
-不要用测试页面，直接访问主网站：
-- http://localhost:5173
-- 尝试登录功能
-- 打开F12查看实际错误
+# 通常文件名是：default 或 baicloud.miever.net
+```
+
+### 步骤 3：编辑配置文件
+```bash
+sudo nano /etc/nginx/sites-available/default
+```
+
+### 步骤 4：添加配置
+
+找到这行：
+```nginx
+server {
+    listen 80;
+```
+
+在它下面添加：
+```nginx
+server {
+    client_max_body_size 50M;    # ← 添加这行
+    listen 80;
+```
+
+然后找到：
+```nginx
+location /api {
+    proxy_pass http://localhost:8000;
+```
+
+在它下面添加：
+```nginx
+location /api {
+    client_max_body_size 50M;    # ← 添加这行
+    proxy_pass http://localhost:8000;
+```
+
+### 步骤 5：保存并应用
+```bash
+# 保存文件（在 nano 中：Ctrl+O, Enter, Ctrl+X）
+
+# 测试配置
+sudo nginx -t
+
+# 如果测试通过，重新加载
+sudo systemctl reload nginx
+```
+
+---
+
+## 方法 3：一行命令修复（最简单）
+
+如果你知道配置文件位置，可以直接运行：
+
+```bash
+# 备份
+sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.backup
+
+# 添加配置（如果不存在）
+sudo sed -i '/server {/a\    client_max_body_size 50M;' /etc/nginx/sites-available/default
+sudo sed -i '/location \/api {/a\        client_max_body_size 50M;' /etc/nginx/sites-available/default
+
+# 测试并重新加载
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+---
 
 ## ✅ 验证修复
 
-修复后，访问 http://localhost:5173 应该可以：
-- 正常显示页面
-- 可以登录
-- 可以查看任务列表
-- API请求成功（在F12 Network标签中查看）
+运行以下命令确认配置已生效：
+```bash
+sudo nginx -T | grep "client_max_body_size"
+```
 
-## 📋 如果还是不行
+应该看到两行 `client_max_body_size 50M;`
 
-请提供以下信息：
-1. 使用的浏览器（Chrome/Safari/Firefox）
-2. F12 Console中的完整错误信息
-3. F12 Network标签中失败请求的详细信息
+---
 
+## ❓ 如果还有问题
+
+1. **检查 Nginx 错误日志**：
+   ```bash
+   sudo tail -f /var/log/nginx/error.log
+   ```
+
+2. **检查后端服务**：
+   ```bash
+   pm2 list
+   pm2 logs www-backend
+   ```
+
+3. **测试 API 直接访问**：
+   ```bash
+   curl -v http://localhost:8000/tasks
+   ```

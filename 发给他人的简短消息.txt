@@ -1,0 +1,19 @@
+Hi [姓名],
+
+我们遇到了一个紧急问题：用户无法上传照片，出现 HTTP 413 错误。
+
+请在服务器 (18.166.68.164) 上修复 Nginx 配置：
+
+运行这个命令：
+sudo bash -c '
+CONFIG_FILE="/etc/nginx/sites-available/default"
+sudo cp "$CONFIG_FILE" "$CONFIG_FILE.backup.$(date +%Y%m%d-%H%M%S)"
+sudo sed -i "/server[[:space:]]*{/a\    client_max_body_size 50M;" "$CONFIG_FILE"
+sudo sed -i "/location[[:space:]]*\/api[[:space:]]*{/a\        client_max_body_size 50M;" "$CONFIG_FILE"
+sudo nginx -t && sudo systemctl reload nginx && echo "✅ 修复完成！"
+'
+
+这样就能允许上传最大 50MB 的文件了。只需要 1-2 分钟就能搞定。
+
+修复完成后告诉我一下，谢谢！
+

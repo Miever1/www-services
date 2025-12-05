@@ -1,0 +1,53 @@
+Subject: Urgent: Nginx Configuration Fix Needed - HTTP 413 Error
+
+Hi [Name],
+
+We have an urgent issue on our deployed site that needs to be fixed on the server.
+
+PROBLEM:
+- Users cannot upload photos when creating posts
+- Error: HTTP 413 (Request Entity Too Large)
+- Server: 18.166.68.164 (baicloud.miever.net)
+- Nginx 1.24.0 (Ubuntu)
+
+CAUSE:
+Nginx's default request size limit (1MB) is too small for image uploads.
+
+SOLUTION:
+Please SSH into the server and run this command:
+
+```bash
+sudo bash -c '
+CONFIG_FILE="/etc/nginx/sites-available/default"
+BACKUP="$CONFIG_FILE.backup.$(date +%Y%m%d-%H%M%S)"
+sudo cp "$CONFIG_FILE" "$BACKUP"
+
+if ! grep -q "client_max_body_size.*50M" "$CONFIG_FILE"; then
+  sudo sed -i "/server[[:space:]]*{/a\    client_max_body_size 50M;" "$CONFIG_FILE"
+fi
+
+if grep -q "location[[:space:]]*/api" "$CONFIG_FILE"; then
+  if ! grep -A 10 "location[[:space:]]*/api" "$CONFIG_FILE" | grep -q "client_max_body_size.*50M"; then
+    sudo sed -i "/location[[:space:]]*\/api[[:space:]]*{/a\        client_max_body_size 50M;" "$CONFIG_FILE"
+  fi
+fi
+
+sudo nginx -t && sudo systemctl reload nginx && echo "✅ Fixed!"
+'
+```
+
+This will:
+1. Backup the config file
+2. Add `client_max_body_size 50M;` to server and location blocks
+3. Test the configuration
+4. Reload Nginx if test passes
+
+VERIFICATION:
+After running, check with: `sudo nginx -T | grep client_max_body_size`
+
+You should see `client_max_body_size 50M;` in the output.
+
+This is a quick fix and shouldn't take more than 2 minutes. Let me know once it's done!
+
+Thanks!
+

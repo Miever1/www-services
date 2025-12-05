@@ -1,187 +1,136 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount, onDestroy } from 'svelte';
-  import { apiUrl, API_CONFIG } from '$lib/api-config.js';
+  import { onMount } from 'svelte';
+  import { API_CONFIG, apiUrl } from '$lib/api-config.js';
   
-  let postType = 'need';
-  let uploadedImages = [];
-  let imageUrls = [];
-  let postTitle = '';
-  let description = '';
-  let price = '';
-  let location = 'Espoo, Finland';
-  let showLocationSuggestions = false;
-  let locationSuggestions = [];
-  let searchingLocation = false;
-  
-  let submitting = false;
+  // User authentication state
   let isLoggedIn = false;
   let currentUser = null;
   let showUserMenu = false;
   let showLanguageMenu = false;
   let currentLanguage = 'en';
   
-  async function fetchCurrentUser() {
-    try {
-      const response = await fetch(apiUrl(API_CONFIG.endpoints.auth.session), {
-        credentials: 'include' // Include cookies for session
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.user) {
-          currentUser = data.user;
-          isLoggedIn = true;
-          // Also save to localStorage for fallback
-          localStorage.setItem('user', JSON.stringify(data.user));
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching user:', error);
-      // Fallback to localStorage if server request fails
-      const userData = localStorage.getItem('user');
-      if (userData) {
-        currentUser = JSON.parse(userData);
-        isLoggedIn = true;
-      }
-    }
-  }
+  // Form state
+  let postType = 'need';
+  let postTitle = '';
+  let description = '';
+  let price = 0;
+  let location = '';
+  let uploadedImages = []; // File objects
+  let imageBase64Array = []; // Base64 strings for API
   
-  function handleUserUpdate(event) {
-    // Try to get user from event detail first, then localStorage
-    let updatedUser = null;
-    if (event && event.detail && event.detail.user) {
-      updatedUser = event.detail.user;
-    } else {
-      const userData = localStorage.getItem('user');
-      if (userData) {
-        try {
-          updatedUser = JSON.parse(userData);
-        } catch (e) {
-          console.error('Failed to parse user data:', e);
-        }
-      }
-    }
-    
-    if (updatedUser) {
-      // Force reactivity by creating a new object
-      currentUser = { ...updatedUser };
-      isLoggedIn = true;
-    } else {
-      currentUser = null;
-      isLoggedIn = false;
-    }
-  }
+  // Location search
+  let showLocationSuggestions = false;
+  let locationSuggestions = [];
+  let searchingLocation = false;
   
-  onMount(async () => {
-    // Try to get user from server first (c.user from middleware)
-    await fetchCurrentUser();
-    
-    // If not logged in, redirect to login page after showing message
-    if (!isLoggedIn) {
-      console.log('User not logged in, showing login prompt');
-    }
-    
-    const savedLanguage = localStorage.getItem('language');
-    if (savedLanguage) {
-      currentLanguage = savedLanguage;
-    }
-    
-    // Listen for user updates from other tabs/pages
-    if (typeof window !== 'undefined') {
-      window.addEventListener('storage', (e) => {
-        if (e.key === 'user') {
-          handleUserUpdate();
-        }
-      });
-      
-      // Also listen for custom events within the same tab
-      window.addEventListener('userUpdated', handleUserUpdate);
-      window.addEventListener('storage', (e) => {
-        if (e.key === 'user') {
-          handleUserUpdate(e);
-        }
-      });
-    }
-  });
+  // Submission state
+  let submitting = false;
   
-  onDestroy(() => {
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('userUpdated', handleUserUpdate);
-    }
-  });
-  
-  function handleLogout() {
-    localStorage.removeItem('user');
-    isLoggedIn = false;
-    currentUser = null;
-    showUserMenu = false;
-  }
-  
-  function changeLanguage(lang) {
-    currentLanguage = lang;
-    localStorage.setItem('language', lang);
-    showLanguageMenu = false;
-  }
-  
-  function toggleUserMenu() {
-    showUserMenu = !showUserMenu;
-  }
-  
-  function toggleLanguageMenu() {
-    showLanguageMenu = !showLanguageMenu;
-  }
-  
+  // Language settings
   const languages = {
     en: 'English',
     sv: 'Svenska',
     fi: 'Suomi'
   };
   
-  function handleImageUpload(event) {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    
-    // Calculate how many more images we can add
-    const currentCount = uploadedImages.length;
-    const remainingSlots = 6 - currentCount;
-    
-    if (remainingSlots <= 0) {
-      alert('Maximum of 6 pictures allowed. Please remove some images first.');
-      event.target.value = ''; // Clear the input
-      return;
+  onMount(async () => {
+    // Check login status
+    try {
+      const response = await fetch(apiUrl(API_CONFIG.endpoints.auth.session), {
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.user) {
+          currentUser = data.user;
+          isLoggedIn = true;
+        }
+      }
+    } catch (error) {
+      console.error('Error checking session:', error);
     }
     
-    // Only take as many files as we have remaining slots
-    const filesToAdd = Array.from(files).slice(0, remainingSlots);
+    // Get language preference
+    const savedLanguage = localStorage.getItem('language');
+    if (savedLanguage) {
+      currentLanguage = savedLanguage;
+    }
+  });
+  
+  // Convert image file to base64
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  
+  // Handle image upload
+  async function handleImageUpload(event) {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
     
-    // If user tried to add more than remaining slots, show a warning
+    // Limit to 6 images
+    const remainingSlots = 6 - uploadedImages.length;
+    const filesToAdd = files.slice(0, remainingSlots);
+    
     if (files.length > remainingSlots) {
-      alert(`You can only add ${remainingSlots} more picture(s). Only the first ${remainingSlots} will be added.`);
+      alert(`You can only upload ${remainingSlots} more image(s). Maximum 6 images allowed.`);
     }
     
-    // Append new files to existing ones
+    // Add files to uploadedImages array
     uploadedImages = [...uploadedImages, ...filesToAdd];
-    imageUrls = uploadedImages.map(file => URL.createObjectURL(file));
     
-    // Clear the input so the same file can be selected again
+    // Convert all images to base64
+    imageBase64Array = [];
+    for (const file of uploadedImages) {
+      try {
+        const base64 = await fileToBase64(file);
+        imageBase64Array.push(base64);
+      } catch (error) {
+        console.error('Error converting image to base64:', error);
+      }
+    }
+    
+    // Reset file input
     event.target.value = '';
   }
   
-  function removeImage(index) {
-    // Revoke the URL for the image being removed
-    URL.revokeObjectURL(imageUrls[index]);
+  // Handle location input change
+  let locationTimeout;
+  async function handleLocationChange(value) {
+    location = value;
+    showLocationSuggestions = false;
     
-    // Remove the image and its URL
-    uploadedImages = uploadedImages.filter((_, i) => i !== index);
-    imageUrls = imageUrls.filter((_, i) => i !== index);
+    clearTimeout(locationTimeout);
+    
+    if (value.length < 3) {
+      return;
+    }
+    
+    locationTimeout = setTimeout(async () => {
+      try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(value)}&limit=5`, {
+          headers: {
+            'User-Agent': 'HandyGO App'
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          locationSuggestions = data;
+          showLocationSuggestions = data.length > 0;
+        }
+      } catch (error) {
+        console.error('Error fetching location suggestions:', error);
+      }
+    }, 500);
   }
   
-  // Cleanup on component destroy
-  onDestroy(() => {
-    imageUrls.forEach(url => URL.revokeObjectURL(url));
-  });
-  
-  async function getCurrentLocation() {
+  // Get current location
+  function getCurrentLocation() {
     if (!navigator.geolocation) {
       alert('Geolocation is not supported by your browser');
       return;
@@ -190,126 +139,64 @@
     searchingLocation = true;
     navigator.geolocation.getCurrentPosition(
       async (position) => {
-        const { latitude, longitude } = position.coords;
-        
-        // Use OpenStreetMap Nominatim API for reverse geocoding
         try {
+          const { latitude, longitude } = position.coords;
           const response = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
+            {
+              headers: {
+                'User-Agent': 'HandyGO App'
+              }
+            }
           );
-          const data = await response.json();
-          
-          if (data.address) {
-            const parts = [];
-            if (data.address.city) parts.push(data.address.city);
-            if (data.address.state) parts.push(data.address.state);
-            if (data.address.country) parts.push(data.address.country);
-            location = parts.join(', ') || `${latitude}, ${longitude}`;
+          if (response.ok) {
+            const data = await response.json();
+            location = data.display_name || `${latitude}, ${longitude}`;
+            showLocationSuggestions = false;
           }
         } catch (error) {
           console.error('Error getting location:', error);
-          location = `${latitude}, ${longitude}`;
+          alert('Failed to get location name');
+        } finally {
+          searchingLocation = false;
         }
-        searchingLocation = false;
       },
       (error) => {
         console.error('Error getting location:', error);
-        alert('Unable to get your location');
+        alert('Failed to get your location');
         searchingLocation = false;
       }
     );
   }
   
-  async function searchLocation(query) {
-    if (!query.trim()) {
-      locationSuggestions = [];
-      showLocationSuggestions = false;
-      return;
-    }
-    
-    try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5`
-      );
-      const data = await response.json();
-      
-      locationSuggestions = data.map(item => ({
-        display_name: item.display_name,
-        lat: item.lat,
-        lon: item.lon
-      }));
-      showLocationSuggestions = true;
-    } catch (error) {
-      console.error('Error searching location:', error);
-    }
-  }
-  
-  function handleLocationChange(value) {
-    location = value;
-    searchLocation(value);
-  }
-  
+  // Select location from suggestions
   function selectLocation(suggestion) {
     location = suggestion.display_name;
     showLocationSuggestions = false;
     locationSuggestions = [];
   }
   
-  async function convertImagesToBase64() {
-    const base64Images = [];
-    for (const file of uploadedImages) {
-      try {
-        const base64 = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            // Keep the full data URL format for easier display
-            resolve({
-              data: reader.result, // data:image/jpeg;base64,/9j/4AAQ...
-              mimeType: file.type || 'image/jpeg',
-              name: file.name || 'image.jpg'
-            });
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-        base64Images.push(base64);
-      } catch (error) {
-        console.error('Error converting image to base64:', error);
-        // Continue with other images even if one fails
-      }
-    }
-    return base64Images;
-  }
-  
+  // Handle post submission
   async function handlePost() {
-    // Check login status before posting
-    if (!isLoggedIn || !currentUser) {
-      alert('Please log in to post a task. Redirecting to login page...');
-      goto('/login?redirect=/post');
+    if (!postTitle.trim() || !description.trim()) {
+      alert('Please fill in title and description');
       return;
     }
     
-    if (!postTitle.trim() || !description.trim()) {
-      alert('Please fill in all required fields');
+    if (!location.trim()) {
+      alert('Please enter a location');
       return;
     }
     
     submitting = true;
     try {
-      const sanitizedPrice = (price ?? '').toString().trim();
-      const sanitizedLocation = (location ?? '').toString().trim();
-      
-      // Convert images to base64
-      const images = await convertImagesToBase64();
-      
-      const payload = {
-        name: postTitle.trim(),
-        description: description.trim(),
-        price: sanitizedPrice !== '' ? sanitizedPrice : '0',
-        location: sanitizedLocation !== '' ? sanitizedLocation : 'Espoo, Finland',
-        type: postType || 'need',
-        userId: currentUser?.id || currentUser?.email || currentUser?.name || 'anonymous',
-        images: images // Add images to payload
+      const taskData = {
+        name: postTitle,
+        description: description,
+        location: location,
+        price: parseFloat(price) || 0,
+        type: postType,
+        images: imageBase64Array // Send base64 images
       };
       
       const response = await fetch(apiUrl(API_CONFIG.endpoints.tasks), {
@@ -317,44 +204,94 @@
         headers: {
           'Content-Type': 'application/json',
         },
-        credentials: 'include', // Include cookies for session
-        body: JSON.stringify(payload)
+        credentials: 'include',
+        body: JSON.stringify(taskData)
       });
-      
-      console.log('Response status:', response.status);
-      console.log('Response ok:', response.ok);
       
       if (response.ok) {
         const result = await response.json();
-        console.log('Post created successfully:', result);
-        alert('Post created successfully!');
-        
-        // Clear form and uploaded images
-        postTitle = '';
-        description = '';
-        price = '';
-        location = 'Espoo, Finland';
-        uploadedImages = [];
-        imageUrls.forEach(url => URL.revokeObjectURL(url));
-        imageUrls = [];
-        
-        goto('/search');
+        console.log('Task created successfully:', result);
+        goto('/');
       } else {
-        const errorText = await response.text();
-        console.error('Failed to create post. Status:', response.status, 'Response:', errorText);
-        throw new Error(`Failed to create post: ${response.status} - ${errorText}`);
+        // Handle error response - only read body once
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        
+        // Check for specific status codes
+        if (response.status === 413) {
+          errorMessage = 'Request too large: The image(s) you uploaded are too large. Please try uploading smaller images or fewer images.';
+        } else if (response.status === 400) {
+          errorMessage = 'Bad request: Invalid data provided. Please check your input.';
+        } else if (response.status === 401) {
+          errorMessage = 'Unauthorized: Please log in and try again.';
+        } else if (response.status === 500) {
+          errorMessage = 'Server error: Something went wrong on the server. Please try again later.';
+        }
+        
+        try {
+          // Clone the response to read it without consuming the original
+          const clonedResponse = response.clone();
+          const contentType = clonedResponse.headers.get('content-type');
+          
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await clonedResponse.json();
+            errorMessage = errorData.error || errorData.message || errorMessage;
+            console.error('Server error response:', errorData);
+          } else {
+            const errorText = await clonedResponse.text();
+            if (errorText) {
+              errorMessage = errorText;
+              console.error('Server error (text):', errorText);
+            }
+          }
+        } catch (parseError) {
+          // If we can't parse, use the status-based message
+          console.error('Failed to parse error response:', parseError);
+          console.error('Response status:', response.status, response.statusText);
+        }
+        
+        throw new Error(errorMessage);
       }
     } catch (error) {
-      console.error('Error creating post:', error);
+      console.error('Error creating task:', error);
       console.error('Error details:', {
         message: error.message,
         stack: error.stack,
-        cause: error.cause
+        name: error.name
       });
-      alert(`Failed to create post. Please try again. Error: ${error.message}`);
+      alert(`Failed to create task: ${error.message}`);
     } finally {
       submitting = false;
     }
+  }
+  
+  // User menu functions
+  function toggleUserMenu() {
+    showUserMenu = !showUserMenu;
+  }
+  
+  function toggleLanguageMenu() {
+    showLanguageMenu = !showLanguageMenu;
+  }
+  
+  function changeLanguage(lang) {
+    currentLanguage = lang;
+    localStorage.setItem('language', lang);
+    showLanguageMenu = false;
+  }
+  
+  async function handleLogout() {
+    try {
+      await fetch(apiUrl(API_CONFIG.endpoints.auth.logout), {
+        method: 'POST',
+        credentials: 'include'
+      });
+    } catch (error) {
+      console.error('Error logging out:', error);
+    }
+    isLoggedIn = false;
+    currentUser = null;
+    showUserMenu = false;
+    goto('/');
   }
 </script>
 
@@ -374,12 +311,8 @@
         {#if isLoggedIn}
           <div class="user-menu-wrapper">
             <div class="user-info" on:click={toggleUserMenu}>
-              {#if currentUser?.avatar_url}
-                <img src={currentUser.avatar_url} alt="User Avatar" class="user-avatar" />
-              {:else}
-                <img src="https://ui-avatars.com/api/?name={encodeURIComponent(currentUser?.name || currentUser?.username || 'User')}&background=ECF86E&color=000" alt="User Avatar" class="user-avatar" />
-              {/if}
-              <span class="user-name">{currentUser?.name || currentUser?.username || 'User'}</span>
+              <img src="https://ui-avatars.com/api/?name={currentUser?.name || 'User'}&background=ECF86E&color=000" alt="User Avatar" class="user-avatar" />
+              <span class="user-name">{currentUser?.name || 'User'}</span>
               <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class="dropdown-arrow">
                 <path d="M1 1L6 6L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
@@ -445,44 +378,8 @@
   </header>
 
   <div class="container">
-    {#if !isLoggedIn}
-      <!-- Login Prompt Card -->
-      <div class="login-prompt">
-        <div class="login-prompt-content">
-          <div class="login-icon">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
-              <polyline points="10 17 15 12 10 7"></polyline>
-              <line x1="15" y1="12" x2="3" y2="12"></line>
-            </svg>
-          </div>
-          <h2 class="login-prompt-title">Login Required</h2>
-          <p class="login-prompt-message">
-            You need to be logged in to post a task. Please log in or create an account to continue.
-          </p>
-          <div class="login-prompt-actions">
-            <button class="btn-login-prompt" on:click={() => goto('/login?redirect=/post')}>
-              Log In
-            </button>
-            <button class="btn-register-prompt" on:click={() => goto('/register?redirect=/post')}>
-              Create Account
-            </button>
-          </div>
-          <div class="login-prompt-benefits">
-            <p class="benefits-title">Benefits of creating an account:</p>
-            <ul class="benefits-list">
-              <li>✓ Post your tasks and needs</li>
-              <li>✓ Connect with other students</li>
-              <li>✓ Manage your posted tasks</li>
-              <li>✓ Build your reputation</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    {:else}
-      <!-- Post Form (only shown when logged in) -->
-      <div class="post-content">
-        <h1 class="page-title">New Announcement</h1>
+    <div class="post-content">
+      <h1 class="page-title">New Announcement</h1>
       
       <!-- Type Selection -->
       <div class="form-section">
@@ -525,22 +422,9 @@
         </div>
         {#if uploadedImages.length > 0}
           <div class="uploaded-images">
-            {#each uploadedImages as image, index}
+            {#each uploadedImages as image}
               <div class="image-preview">
-                <img src={imageUrls[index]} alt="Preview {index + 1}" on:error={(e) => {
-                  console.error('Image load error:', e);
-                  e.target.style.display = 'none';
-                }} />
-                <button 
-                  class="remove-image-btn" 
-                  on:click={() => removeImage(index)}
-                  aria-label="Remove image"
-                  title="Remove image"
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/>
-                  </svg>
-                </button>
+                <img src={URL.createObjectURL(image)} alt="Preview" />
               </div>
             {/each}
           </div>
@@ -637,8 +521,7 @@
           {submitting ? 'Posting...' : 'Post'}
         </button>
       </div>
-      </div>
-    {/if}
+    </div>
   </div>
 </main>
 
@@ -968,49 +851,12 @@
     height: 100px;
     border-radius: 8px;
     overflow: hidden;
-    border: 2px solid #EAF2FD;
-    background: #F5F5F5;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
   }
   
   .image-preview img {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    display: block;
-  }
-  
-  .remove-image-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 24px;
-    height: 24px;
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid #EAF2FD;
-    border-radius: 50%;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    padding: 0;
-    color: #666;
-  }
-  
-  .remove-image-btn:hover {
-    background: rgba(255, 0, 0, 0.1);
-    border-color: #FF0000;
-    color: #FF0000;
-    transform: scale(1.1);
-  }
-  
-  .remove-image-btn svg {
-    width: 14px;
-    height: 14px;
   }
   
   /* Form Inputs */
@@ -1172,127 +1018,6 @@
     cursor: not-allowed;
   }
   
-  /* Login Prompt */
-  .login-prompt {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 60vh;
-    padding: 2rem 20px;
-  }
-  
-  .login-prompt-content {
-    background: #FFFFFF;
-    border: 2px solid #EAF2FD;
-    border-radius: 16px;
-    padding: 3rem;
-    max-width: 600px;
-    width: 100%;
-    text-align: center;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  }
-  
-  .login-icon {
-    margin: 0 auto 1.5rem;
-    width: 80px;
-    height: 80px;
-    background: #F8FFCB;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #000;
-  }
-  
-  .login-prompt-title {
-    font-size: 2rem;
-    font-weight: 700;
-    color: #000000;
-    margin-bottom: 1rem;
-  }
-  
-  .login-prompt-message {
-    font-size: 1.1rem;
-    color: #666;
-    line-height: 1.6;
-    margin-bottom: 2rem;
-  }
-  
-  .login-prompt-actions {
-    display: flex;
-    gap: 1rem;
-    justify-content: center;
-    margin-bottom: 2rem;
-  }
-  
-  .btn-login-prompt {
-    background: #000000;
-    border: 2px solid #000000;
-    color: #FFFFFF;
-    padding: 0.875rem 2rem;
-    border-radius: 8px;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-  
-  .btn-login-prompt:hover {
-    background: #333333;
-    border-color: #333333;
-    transform: translateY(-2px);
-  }
-  
-  .btn-register-prompt {
-    background: #ECF86E;
-    border: 2px solid #ECF86E;
-    color: #000000;
-    padding: 0.875rem 2rem;
-    border-radius: 8px;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-  
-  .btn-register-prompt:hover {
-    background: #E0F055;
-    border-color: #E0F055;
-    transform: translateY(-2px);
-  }
-  
-  .login-prompt-benefits {
-    margin-top: 2rem;
-    padding-top: 2rem;
-    border-top: 1px solid #EAF2FD;
-    text-align: left;
-  }
-  
-  .benefits-title {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #000000;
-    margin-bottom: 1rem;
-    text-align: center;
-  }
-  
-  .benefits-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.75rem;
-  }
-  
-  .benefits-list li {
-    font-size: 0.95rem;
-    color: #666;
-    padding: 0.5rem;
-    background: #F8FFCB;
-    border-radius: 6px;
-  }
-  
   /* Responsive */
   @media (max-width: 768px) {
     .upload-container {
@@ -1306,23 +1031,6 @@
     
     .post-btn {
       width: 100%;
-    }
-    
-    .login-prompt-content {
-      padding: 2rem 1.5rem;
-    }
-    
-    .login-prompt-actions {
-      flex-direction: column;
-    }
-    
-    .btn-login-prompt,
-    .btn-register-prompt {
-      width: 100%;
-    }
-    
-    .benefits-list {
-      grid-template-columns: 1fr;
     }
   }
 </style>

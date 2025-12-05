@@ -423,22 +423,43 @@
       });
       
       // LOCK the marker position BEFORE adding to map
+      // Store original latlng in a closure variable to prevent recursion
+      let lockedLatLng = originalLatLng;
+      let isUpdating = false; // Flag to prevent recursion
+      
       // Override setLatLng to always restore original position
       const originalSetLatLng = marker.setLatLng.bind(marker);
       marker.setLatLng = function(newLatLng) {
-        // Always restore to original position - ignore any attempts to move it
-        if (L && this._map) {
-          // Force set the internal position property
-          this._latlng = originalLatLng;
-          // Update the visual position immediately
-          if (this._updatePosition) {
-            this._updatePosition();
+        // Prevent recursion
+        if (isUpdating) return this;
+        isUpdating = true;
+        
+        try {
+          // Always restore to original position - ignore any attempts to move it
+          if (L && this._map) {
+            // Directly set internal property without triggering setters
+            if (this.hasOwnProperty('_latlng')) {
+              delete this._latlng;
+            }
+            // Use direct property assignment
+            Object.defineProperty(this, '_latlng', {
+              value: lockedLatLng,
+              writable: false,
+              configurable: true,
+              enumerable: false
+            });
+            
+            // Update the visual position immediately
+            if (this._updatePosition && typeof this._updatePosition === 'function') {
+              try {
+                this._updatePosition();
+              } catch (e) {
+                console.warn('Error updating marker position:', e);
+              }
+            }
           }
-          // Also update the icon position if it exists
-          if (this._icon && this._icon.parentNode) {
-            const point = this._map.latLngToLayerPoint(originalLatLng);
-            L.DomUtil.setPosition(this._icon, point);
-          }
+        } finally {
+          isUpdating = false;
         }
         return this;
       };
@@ -447,28 +468,24 @@
       const originalGetLatLng = marker.getLatLng.bind(marker);
       marker.getLatLng = function() {
         // Always return the original locked position
-        return originalLatLng;
+        return lockedLatLng;
       };
       
-      // Lock the internal _latlng property
+      // Set initial position directly
       try {
+        if (marker.hasOwnProperty('_latlng')) {
+          delete marker._latlng;
+        }
         Object.defineProperty(marker, '_latlng', {
-          get: function() {
-            return originalLatLng;
-          },
-          set: function(val) {
-            // Ignore any attempts to set position directly
-            // Force it back to original
-            this._latlng = originalLatLng;
-            if (this._map && this._updatePosition) {
-              this._updatePosition();
-            }
-          },
-          configurable: false
+          value: lockedLatLng,
+          writable: false,
+          configurable: true,
+          enumerable: false
         });
       } catch (e) {
-        // If we can't lock it, at least ensure it's set correctly
-        marker._latlng = originalLatLng;
+        console.warn('Could not lock marker position property:', e);
+        // Fallback: just set it normally
+        marker._latlng = lockedLatLng;
       }
       
       // Now add to map
@@ -478,28 +495,21 @@
       marker.setLatLng(originalLatLng);
       
       // Periodically check and fix position (safety net)
-      // Use more frequent checks and immediate restoration
+      // Use less frequent checks to reduce overhead
       const positionCheckInterval = setInterval(() => {
         if (!marker._map || !marker._icon) {
           clearInterval(positionCheckInterval);
           return;
         }
+        // Use getLatLng which returns the locked position
         const currentPos = marker.getLatLng();
         // Check if position has moved (tolerance of 0.0001 degrees ~ 11 meters)
         if (currentPos && (Math.abs(currentPos.lat - originalLat) > 0.0001 || Math.abs(currentPos.lng - originalLng) > 0.0001)) {
           console.warn(`⚠️ Marker ${taskId} position changed from (${currentPos.lat.toFixed(6)}, ${currentPos.lng.toFixed(6)}) to (${originalLat.toFixed(6)}, ${originalLng.toFixed(6)})! Restoring.`);
-          // Force restore immediately
-          marker._latlng = originalLatLng;
-          if (marker._updatePosition) {
-            marker._updatePosition();
-          }
+          // Force restore immediately using setLatLng which handles recursion prevention
           marker.setLatLng(originalLatLng);
         }
-        // Always ensure _latlng property is correct
-        if (marker._latlng && (Math.abs(marker._latlng.lat - originalLat) > 0.0001 || Math.abs(marker._latlng.lng - originalLng) > 0.0001)) {
-          marker._latlng = originalLatLng;
-        }
-      }, 50); // Check every 50ms for faster response
+      }, 200); // Check every 200ms to reduce overhead and prevent recursion issues
       
       // Store interval ID so we can clear it if needed
       marker._positionCheckInterval = positionCheckInterval;
@@ -568,7 +578,11 @@
       // Lock position on any other events that might cause movement
       marker.on('dragstart drag dragend', (e) => {
         e.preventDefault();
-        marker.setLatLng(originalLatLng);
+        e.stopPropagation();
+        // Use setTimeout to avoid recursion during event handling
+        setTimeout(() => {
+          marker.setLatLng(originalLatLng);
+        }, 0);
       });
       
       markers.push(marker);
