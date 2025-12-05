@@ -10,6 +10,33 @@
   let showPassword = false;
   let error = '';
   let loading = false;
+  let showLanguageMenu = false;
+  let currentLanguage = 'en';
+  
+  const languages = {
+    en: 'English',
+    sv: 'Svenska',
+    fi: 'Suomi'
+  };
+  
+  function toggleLanguageMenu() {
+    showLanguageMenu = !showLanguageMenu;
+  }
+  
+  function changeLanguage(lang) {
+    currentLanguage = lang;
+    localStorage.setItem('language', lang);
+    showLanguageMenu = false;
+  }
+  
+  onMount(() => {
+    if (browser) {
+      const savedLanguage = localStorage.getItem('language');
+      if (savedLanguage && languages[savedLanguage]) {
+        currentLanguage = savedLanguage;
+      }
+    }
+  });
 
   async function handleLogin() {
     error = '';
@@ -63,28 +90,49 @@
 </svelte:head>
 
 <div class="auth-container">
-  <button class="back-button" on:click={() => goto('/')}>
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-      <path d="M12.5 15L7.5 10L12.5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-    BACK
-  </button>
+  <!-- Top Header -->
+  <header class="header">
+    <div class="container">
+      <div class="nav-left" on:click={() => goto('/')} role="button" tabindex="0">
+        <img src="/favicon.png" alt="HandyGO" class="logo-icon" />
+        <h1 class="logo">HandyGO</h1>
+      </div>
+      <nav class="nav-right">
+        <!-- Language Selector -->
+        <div class="language-wrapper">
+          <button class="language-btn" on:click={toggleLanguageMenu}>
+            {languages[currentLanguage]}
+            <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class="dropdown-arrow">
+              <path d="M1 1L6 6L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+          {#if showLanguageMenu}
+            <div class="language-dropdown">
+              <button class="dropdown-item" class:active={currentLanguage === 'en'} on:click={() => changeLanguage('en')}>
+                English
+              </button>
+              <button class="dropdown-item" class:active={currentLanguage === 'sv'} on:click={() => changeLanguage('sv')}>
+                Svenska
+              </button>
+              <button class="dropdown-item" class:active={currentLanguage === 'fi'} on:click={() => changeLanguage('fi')}>
+                Suomi
+              </button>
+            </div>
+          {/if}
+        </div>
+      </nav>
+    </div>
+  </header>
 
   <div class="content-wrapper">
     <!-- Left Card - Marketing -->
     <div class="marketing-card">
-      <div class="logo-section">
-        <div class="logo">
-          <span class="logo-text">HandyGo</span>
-          <span class="logo-icon">🏃</span>
-        </div>
-      </div>
       <h1 class="marketing-title">Connect & Get It Done</h1>
       <p class="marketing-description">
         Connect with verified fellow students for quick, reliable help with campus tasks.
       </p>
       <div class="marketing-illustration">
-        <!-- Placeholder for illustration -->
+        <img src="/login-illustration.png" alt="HandyGO Illustration" class="illustration-image" />
       </div>
     </div>
 
@@ -164,115 +212,200 @@
 
 <style>
   .auth-container {
-    min-height: 100vh;
+    height: 100vh;
+    max-height: 100vh;
     background-color: #E5E5E5;
     display: flex;
     flex-direction: column;
     position: relative;
-    padding: 20px;
+    padding: 0;
+    overflow: hidden;
   }
 
-  .back-button {
-    position: absolute;
-    top: 20px;
-    left: 20px;
-    background: #ECF86E;
-    border: none;
-    border-radius: 8px;
-    padding: 10px 20px;
+  /* Top Header */
+  .header {
+    background: #FFFFFF;
+    border-bottom: 1px solid #EAF2FD;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .header .container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .nav-left {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-weight: 600;
+    gap: 15px;
     cursor: pointer;
-    z-index: 10;
-    color: #000;
+    transition: opacity 0.2s ease;
   }
 
-  .back-button:hover {
-    background: #E0F055;
+  .nav-left:hover {
+    opacity: 0.7;
+  }
+
+  .logo-icon {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+  }
+
+  .logo {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #000000;
+    margin: 0;
+  }
+
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  /* Language Selector */
+  .language-wrapper {
+    position: relative;
+  }
+  
+  .language-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: none;
+    border: none;
+    color: #666;
+    font-weight: 500;
+    padding: 0.5rem;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+  }
+  
+  .language-btn:hover {
+    background: #EAF2FD;
+    color: #000;
+  }
+  
+  .dropdown-arrow {
+    transition: transform 0.2s ease;
+  }
+  
+  .language-dropdown {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    background: #fff;
+    border: 1px solid #EAF2FD;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    min-width: 150px;
+    z-index: 1000;
+    overflow: hidden;
+  }
+  
+  .dropdown-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border: none;
+    background: none;
+    color: #000;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s ease;
+    text-decoration: none;
+  }
+  
+  .dropdown-item:hover,
+  .dropdown-item.active {
+    background: #F8FFCB;
   }
 
   .content-wrapper {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 40px;
+    grid-template-columns: 1.2fr 0.85fr;
+    gap: 10px;
     max-width: 1400px;
     width: 100%;
-    margin: 60px auto 0;
-    padding: 0 40px;
+    margin: 0 auto;
+    padding: 16px 200px 16px 100px;
+    overflow: hidden;
+    min-height: 0;
   }
 
-  .marketing-card,
   .form-card {
     background: white;
     border-radius: 16px;
-    padding: 40px;
+    padding: 24px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    overflow-y: auto;
+    min-height: 0;
+    max-width: 420px;
+    align-self: start;
   }
 
   .marketing-card {
     display: flex;
     flex-direction: column;
     position: relative;
-  }
-
-  .logo-section {
-    margin-bottom: 30px;
-  }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 1.5rem;
-    font-weight: 700;
-  }
-
-  .logo-text {
-    color: #000;
-  }
-
-  .logo-icon {
-    font-size: 1.8rem;
+    background: transparent;
+    border-radius: 0;
+    padding: 60px 20px 0 60px;
+    box-shadow: none;
+    overflow-y: auto;
+    min-height: 0;
   }
 
   .marketing-title {
-    font-size: 2.5rem;
+    font-size: 2.25rem;
     font-weight: 700;
     color: #000;
-    margin-bottom: 20px;
+    margin-bottom: 12px;
     line-height: 1.2;
   }
 
   .marketing-description {
-    font-size: 1rem;
+    font-size: 0.95rem;
     color: #666;
-    line-height: 1.6;
-    margin-bottom: 30px;
+    line-height: 1.5;
+    margin-bottom: 20px;
   }
 
   .marketing-illustration {
     flex: 1;
-    background: linear-gradient(135deg, #EAF2FD 0%, #F8FFCB 100%);
-    border-radius: 12px;
-    min-height: 300px;
+    min-height: 0;
     position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     overflow: hidden;
+    margin-top: auto;
   }
 
-  .form-card {
-    max-width: 450px;
-    margin-left: auto;
-    align-self: start;
+  .illustration-image {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    object-fit: contain;
+    border-radius: 12px;
   }
 
   .form-title {
-    font-size: 2rem;
+    font-size: 1.75rem;
     font-weight: 700;
     color: #000;
-    margin-bottom: 30px;
+    margin-bottom: 20px;
   }
 
   .error-message {
