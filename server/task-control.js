@@ -44,9 +44,23 @@ const createTask = async (c) => {
     
     console.log(`Create task: Creating task for user ${userId}, name: ${body.name}`);
     
+    // 📸 Debug: Log images data before saving
+    if (body.images) {
+      console.log(`📸 Create task: Images received - count: ${Array.isArray(body.images) ? body.images.length : 1}, first image length: ${Array.isArray(body.images) && body.images[0] ? body.images[0].length : 0}`);
+    } else {
+      console.log(`⚠️ Create task: No images in request body`);
+    }
+    
     const result = await taskService.createTask(userId, body);
     
     console.log(`Create task: Task created successfully with ID: ${result.id}`);
+    
+    // 📸 Debug: Log images data after saving
+    if (result.images) {
+      console.log(`📸 Create task: Images saved - count: ${Array.isArray(result.images) ? result.images.length : 1}`);
+    } else {
+      console.log(`⚠️ Create task: No images in saved task`);
+    }
     
     return c.json(result, 201);
   } catch (error) {

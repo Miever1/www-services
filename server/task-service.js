@@ -32,11 +32,20 @@ const createTask = async (userID, task) => {
   // Handle images - convert to JSONB array format
   const imagesArray = images ? (Array.isArray(images) ? images : [images]) : [];
   
+  // 📸 Debug: Log images before database insert
+  console.log(`📸 task-service: Saving images - count: ${imagesArray.length}, images type: ${typeof images}, isArray: ${Array.isArray(images)}`);
+  if (imagesArray.length > 0) {
+    console.log(`📸 task-service: First image preview: ${imagesArray[0] ? imagesArray[0].substring(0, 100) + '...' : 'null'}`);
+  }
+  
   const result = await sql`
     INSERT INTO tasks (id, name, description, user_id, location, price, type, category, images)
     VALUES (${id}, ${name}, ${description}, ${userIdUuid}::uuid, ${taskLocation}, ${taskPrice}, ${taskType}::task_type, ${category || null}, ${JSON.stringify(imagesArray)}::jsonb)
     RETURNING *;
   `;
+  
+  // 📸 Debug: Log images after database insert
+  console.log(`📸 task-service: Database returned images - has field: ${!!result[0].images}, type: ${typeof result[0].images}, value type: ${result[0].images ? typeof result[0].images : 'null'}`);
 
   const createdTask = result[0];
   // Parse JSONB images field if it exists
@@ -66,15 +75,23 @@ const readTask = async (id) => {
   }
   
   const task = result[0];
+  
+  // 📸 Debug: Log images from database
+  console.log(`📸 task-service: Reading task ${id} - images field exists: ${!!task.images}, type: ${typeof task.images}`);
+  
   // Parse JSONB images field if it exists
   if (task.images) {
     try {
+      const originalImages = task.images;
       task.images = typeof task.images === 'string' ? JSON.parse(task.images) : task.images;
+      console.log(`📸 task-service: Parsed images - count: ${Array.isArray(task.images) ? task.images.length : 'not an array'}`);
     } catch (e) {
-      console.error('Error parsing images:', e);
+      console.error('❌ Error parsing images:', e);
+      console.error('❌ Original images value:', task.images);
       task.images = [];
     }
   } else {
+    console.log(`⚠️ task-service: No images field in database for task ${id}`);
     task.images = [];
   }
   
