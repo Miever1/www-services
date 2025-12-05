@@ -18,7 +18,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v2
         with:
-          node-version: 18
+          node-version: 20
 
       # 3. 环境变量加载（保留，不影响后端）
       - name: Load env
